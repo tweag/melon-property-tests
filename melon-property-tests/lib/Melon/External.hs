@@ -10,6 +10,7 @@ module Melon.External
 import Control.Exception.Safe (Exception (..), throwIO)
 import Control.Monad ((>=>), void)
 import Data.Typeable
+import Path
 import System.Exit
 import System.IO (Handle)
 import System.Process
@@ -23,9 +24,19 @@ import System.Process
 
 
 -- | Common options for external processes.
-newtype Config = Config
-  { cLogFileHandle :: Handle
+data Config = Config
+  { cSmartContractsDir :: Path Abs Dir
+    -- ^ Root directory of the @smart-contracts@ repository.
+  , cLogFileHandle :: Handle
     -- ^ Log-file handle to write stdout and stderr into.
+  }
+
+-- | Apply the given configuration to the given process setup.
+configure :: Config -> CreateProcess -> CreateProcess
+configure cfg createProc = createProc
+  { cwd = Just (fromAbsDir (cSmartContractsDir cfg))
+  , std_out = UseHandle (cLogFileHandle cfg)
+  , std_err = UseHandle (cLogFileHandle cfg)
   }
 
 -- | Failures that can occur during test-env setup.
@@ -50,14 +61,7 @@ withTestEnv cfg action = withCreateProcess testEnvProc $ \_ _ _ ph -> do
   void $ waitForProcess ph
   return r
   where
-    testEnvProc :: CreateProcess
-    testEnvProc = (proc "npm" ["run", "devchain"])
-      -- Note the path is relative to the Haskell project root,
-      -- i.e. the directory containing the file @melon-property-tests.cabal@.
-      { cwd = Just "../smart-contracts"
-      , std_out = UseHandle (cLogFileHandle cfg)
-      , std_err = UseHandle (cLogFileHandle cfg)
-      }
+    testEnvProc = configure cfg $ proc "npm" ["run", "devchain"]
 
 -- | Deploy the test fund.
 setupTestFund :: Config -> IO ()
@@ -66,11 +70,4 @@ setupTestFund cfg = withCreateProcess setupTestFundProc $ \_ _ _ ->
     ExitSuccess -> return ()
     ExitFailure ec -> throwIO $ SetupTestFundFailed ec
   where
-    setupTestFundProc :: CreateProcess
-    setupTestFundProc = (proc "npm" ["run", "setupfund"])
-      -- Note the path is relative to the Haskell project root,
-      -- i.e. the directory containing the file @melon-property-tests.cabal@.
-      { cwd = Just "../smart-contracts"
-      , std_out = UseHandle (cLogFileHandle cfg)
-      , std_err = UseHandle (cLogFileHandle cfg)
-      }
+    setupTestFundProc = configure cfg $ proc "npm" ["run", "setupfund"]
