@@ -1,0 +1,4 @@
+[submodule "smart-contracts"]
+	path = smart-contracts
+	url = https://github.com/melonproject/smart-contracts.git
+	branch = develop
