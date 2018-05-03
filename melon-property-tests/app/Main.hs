@@ -4,6 +4,7 @@ module Main
   ( main
   ) where
 
+import Control.Concurrent (threadDelay)
 import Path
 import Path.IO
 
@@ -20,5 +21,6 @@ main = do
         { cSmartContractsDir = cwd </> [reldir|smart-contracts|]
         }
   withTestEnv cfg $ do
+    threadDelay 10000000
     setupTestFund cfg
     putStrLn "done, bye"
