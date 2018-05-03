@@ -18,7 +18,6 @@ main = do
   (outfile, outhandle) <- openTempFile logdir "out.log"
   let cfg = Config
         { cSmartContractsDir = cwd </> [reldir|smart-contracts|]
-        , cLogFileHandle = outhandle
         }
   withTestEnv cfg $ do
     setupTestFund cfg
