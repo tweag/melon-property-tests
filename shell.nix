@@ -7,6 +7,7 @@ with pkgs;
 mkShell {
   inputsFrom = [
     smart-contracts.shell
+    haskellPackages.melon-property-tests.env
   ];
 
   nativeBuildInputs = [
@@ -15,7 +16,6 @@ mkShell {
     git
     node2nix
     parity
-    stack
 
     scripts.update-node-deps
     scripts.update-haskell-deps
@@ -23,6 +23,6 @@ mkShell {
   ];
 
   buildInputs = [
-    haskellPackages.ghc
+    zlib
   ];
 }
