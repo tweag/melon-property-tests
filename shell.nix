@@ -6,6 +6,7 @@ with pkgs;
 
 mkShell {
   inputsFrom = [
+    smart-contracts.shell
   ];
 
   nativeBuildInputs = [
