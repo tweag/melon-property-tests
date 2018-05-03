@@ -12,6 +12,7 @@ mkShell {
   nativeBuildInputs = [
     git
     node2nix
+    parity
     stack
 
     scripts.update-node-deps
