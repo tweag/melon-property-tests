@@ -9,6 +9,8 @@ with super;
   node2nix-src = self.fetchJSON ./node2nix-src.json;
   node2nix = (callPackage self.node2nix-src {}).package;
 
+  haskellPackages = callPackage ./haskell {};
+
   smart-contracts = callPackage ./smart-contracts {};
 
   scripts = {
