@@ -12,6 +12,8 @@ mkShell {
     git
     node2nix
     stack
+
+    scripts.update-node-deps
   ];
 
   buildInputs = [
