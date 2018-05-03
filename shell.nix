@@ -7,7 +7,7 @@ with pkgs;
 mkShell {
   inputsFrom = [
     smart-contracts.shell
-    haskellPackages.melon-property-tests.env
+    haskellPackages.melon.env
   ];
 
   nativeBuildInputs = [

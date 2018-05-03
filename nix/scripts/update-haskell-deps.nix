@@ -12,8 +12,8 @@ err_msg () {
 
 trap err_msg ERR
 
-[ -d nix/melon-property-tests ] || mkdir nix/melon-property-tests
-cd nix/melon-property-tests
-${cabal2nix}/bin/cabal2nix ../../melon-property-tests \
+[ -d nix/melon ] || mkdir nix/melon
+cd nix/melon
+${cabal2nix}/bin/cabal2nix ../../melon \
   > default.nix
 ''

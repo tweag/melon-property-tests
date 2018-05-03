@@ -2,9 +2,9 @@
 , safe-exceptions, stdenv, web3
 }:
 mkDerivation {
-  pname = "melon-property-tests";
+  pname = "melon";
   version = "0.1.0.0";
-  src = ../../melon-property-tests;
+  src = ../../melon;
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [ base path process safe-exceptions web3 ];

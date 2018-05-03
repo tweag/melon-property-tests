@@ -18,7 +18,7 @@ main = do
   createDirIfMissing True logdir
   (outfile, outhandle) <- openTempFile logdir "out.log"
   let cfg = Config
-        { cSmartContractsDir = cwd </> [reldir|smart-contracts|]
+        { cSmartContractsDir = parent cwd </> [reldir|smart-contracts|]
         }
   withTestEnv cfg $ do
     threadDelay 10000000

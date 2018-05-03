@@ -1,4 +1,4 @@
-# Revision history for melon-property-tests
+# Revision history for melon
 
 ## 0.1.0.0 -- YYYY-mm-dd
 

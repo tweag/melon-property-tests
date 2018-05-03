@@ -17,5 +17,5 @@ melonABIOverview :: String
 melonABIOverview = [abiFrom|../smart-contracts/out/Fund.abi|]
 
 -- Note the path is relative to the Haskell project root,
--- i.e. the directory containing the file @melon-property-tests.cabal@.
+-- i.e. the directory containing the file @melon.cabal@.
 [abiFrom|../smart-contracts/out/Fund.abi|]
