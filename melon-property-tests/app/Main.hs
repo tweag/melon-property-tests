@@ -1,4 +1,22 @@
-module Main where
+{-# LANGUAGE QuasiQuotes #-}
+
+module Main
+  ( main
+  ) where
+
+import Path
+import Path.IO
+
+import Melon.External
+
 
 main :: IO ()
-main = putStrLn "Hello, Haskell!"
+main = do
+  cwd <- getCurrentDir
+  let logdir = cwd </> [reldir|logs|]
+  createDirIfMissing True logdir
+  (outfile, outhandle) <- openTempFile logdir "out.log"
+  let cfg = Config { cLogFileHandle = outhandle }
+  withTestEnv cfg $ do
+    setupTestFund cfg
+    putStrLn "done, bye"
