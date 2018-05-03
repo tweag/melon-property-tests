@@ -10,6 +10,7 @@ mkShell {
   ];
 
   nativeBuildInputs = [
+    cabal-install
     git
     node2nix
     parity

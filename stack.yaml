@@ -1,0 +1,7 @@
+resolver: lts-11.7
+packages:
+- melon-property-tests
+extra-deps:
+- git: https://github.com/airalab/hs-web3.git
+  commit: 3291f4038ca7e71852e2729b85483e10a2fa5e3a
+system-ghc: true
