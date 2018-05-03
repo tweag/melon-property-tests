@@ -13,5 +13,6 @@ with super;
 
   scripts = {
     update-node-deps = callPackage ./scripts/update-node-deps.nix {};
+    build-smart-contracts = callPackage ./scripts/build-smart-contracts.nix {};
   };
 }

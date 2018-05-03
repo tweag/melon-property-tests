@@ -15,6 +15,7 @@ mkShell {
     stack
 
     scripts.update-node-deps
+    scripts.build-smart-contracts
   ];
 
   buildInputs = [
