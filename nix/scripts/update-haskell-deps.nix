@@ -16,4 +16,11 @@ trap err_msg ERR
 cd nix/melon
 ${cabal2nix}/bin/cabal2nix ../../melon \
   > default.nix
+cd -
+
+[ -d nix/hs-web3 ] || mkdir nix/hs-web3
+cd nix/hs-web3
+${cabal2nix}/bin/cabal2nix ../../hs-web3 \
+  > default.nix
+cd -
 ''

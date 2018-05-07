@@ -7,6 +7,7 @@ with pkgs;
 mkShell {
   inputsFrom = [
     smart-contracts.shell
+    haskellPackages.web3.env
     haskellPackages.melon.env
   ];
 

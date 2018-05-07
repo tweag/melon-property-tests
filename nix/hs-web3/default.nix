@@ -1,17 +1,13 @@
 { mkDerivation, aeson, async, base, basement, bytestring, cereal
-, cryptonite, data-default, exceptions, fetchgit, generics-sop
-, hspec, hspec-contrib, hspec-discover, hspec-expectations
-, http-client, machines, memory, mtl, parsec, split, stdenv, stm
-, tagged, template-haskell, text, time, transformers
+, cryptonite, data-default, exceptions, generics-sop, hspec
+, hspec-contrib, hspec-discover, hspec-expectations, http-client
+, machines, memory, mtl, parsec, split, stdenv, stm, tagged
+, template-haskell, text, time, transformers
 }:
 mkDerivation {
   pname = "web3";
   version = "0.7.1.0";
-  src = fetchgit {
-    url = "https://github.com/airalab/hs-web3.git";
-    sha256 = "0b2ixxybpm44nkfqkxb9y55gfflnfkksl9zsq2zs54ir69bp271j";
-    rev = "3291f4038ca7e71852e2729b85483e10a2fa5e3a";
-  };
+  src = ../../hs-web3;
   libraryHaskellDepends = [
     aeson async base basement bytestring cereal cryptonite data-default
     exceptions generics-sop http-client machines memory mtl parsec
