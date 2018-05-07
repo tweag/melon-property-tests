@@ -1,4 +1,6 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Defines calls to external processes to setup the test environment.
 module Melon.External
@@ -8,8 +10,14 @@ module Melon.External
   ) where
 
 import Control.Exception.Safe (Exception (..), throwIO)
+import Control.Lens
 import Control.Monad ((>=>), void)
+import qualified Data.Aeson as Json
+import qualified Data.Aeson.Casing as Json
+import qualified Data.ByteString.Lazy as LBS
 import Data.Typeable
+import GHC.Generics
+import Network.Ethereum.ABI.Prim.Address
 import Path
 import System.Exit
 import System.IO (Handle)
@@ -36,9 +44,11 @@ configure cfg createProc = createProc
   }
 
 -- | Failures that can occur during test-env setup.
-newtype ExternalError
+data ExternalError
   = SetupTestFundFailed Int
     -- ^ Failed to setup the test fund.
+  | ParseTestFundFailed String
+    -- ^ Failed to parse JSON output of test fund setup.
   deriving (Show, Typeable)
 
 instance Exception ExternalError where
@@ -57,13 +67,43 @@ withTestEnv cfg action = withCreateProcess testEnvProc $ \_ _ _ ph -> do
   void $ waitForProcess ph
   return r
   where
-    testEnvProc = configure cfg $ proc "/usr/bin/env" ["npm", "run", "devchain"]
+    testEnvProc = configure cfg
+      (proc "/usr/bin/env" ["npm", "run", "devchain"])
+
+-- | JSON serialization options.
+aesonOptions :: Json.Options
+aesonOptions = Json.aesonPrefix Json.snakeCase
+
+-- | A fund object, called "version" in the smart-contracts tests.
+data FundVersion = FundVersion
+  { _fvAddress :: Address
+    -- ^ The address of the fund.
+  } deriving (Generic, Show)
+instance Json.FromJSON FundVersion where
+  parseJSON = Json.genericParseJSON aesonOptions
+
+-- | Outcome of setting up a test fund.
+data TestFund = TestFund
+  { _tfVersion :: FundVersion
+    -- ^ A fund object, called "version" in the smart-contracts tests.
+  } deriving (Generic, Show)
+instance Json.FromJSON TestFund where
+  parseJSON = Json.genericParseJSON aesonOptions
 
 -- | Deploy the test fund.
-setupTestFund :: Config -> IO ()
-setupTestFund cfg = withCreateProcess setupTestFundProc $ \_ _ _ ->
-  waitForProcess >=> \case
-    ExitSuccess -> return ()
-    ExitFailure ec -> throwIO $ SetupTestFundFailed ec
+setupTestFund :: Config -> IO TestFund
+setupTestFund cfg = withCreateProcess setupTestFundProc $
+  \_ (Just hStdout) _ ph -> do
+    result <- Json.eitherDecode <$> LBS.hGetContents hStdout
+    status <- waitForProcess ph
+    case (status, result) of
+      (ExitFailure ec, _) -> throwIO $ SetupTestFundFailed ec
+      (ExitSuccess, Left err) -> throwIO $ ParseTestFundFailed err
+      (ExitSuccess, Right json) -> return json
   where
-    setupTestFundProc = configure cfg $ proc "/usr/bin/env" ["npm", "run", "setupfund"]
+    setupTestFundProc = configure cfg
+      (proc "/usr/bin/env" ["npm", "run", "-s", "setupfund"])
+      { std_out = CreatePipe }
+
+makeLenses ''FundVersion
+makeLenses ''TestFund

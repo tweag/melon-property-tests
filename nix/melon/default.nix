@@ -1,4 +1,5 @@
-{ mkDerivation, base, hedgehog, path, path-io, process
+{ mkDerivation, aeson, aeson-casing, base, bytestring, data-default
+, hedgehog, lens, lens-aeson, path, path-io, process
 , safe-exceptions, stdenv, web3
 }:
 mkDerivation {
@@ -7,8 +8,13 @@ mkDerivation {
   src = ../../melon;
   isLibrary = true;
   isExecutable = true;
-  libraryHaskellDepends = [ base path process safe-exceptions web3 ];
-  executableHaskellDepends = [ base hedgehog path path-io process ];
+  libraryHaskellDepends = [
+    aeson aeson-casing base bytestring lens lens-aeson path process
+    safe-exceptions web3
+  ];
+  executableHaskellDepends = [
+    base data-default hedgehog path path-io web3
+  ];
   description = "Property based random tests for Melon smart-contract";
   license = stdenv.lib.licenses.gpl3;
 }
