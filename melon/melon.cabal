@@ -37,11 +37,18 @@ library
 executable melon-property-tests
   main-is:             Main.hs
   build-depends:       base >=4.10 && <4.11
+                     , aeson
+                     , aeson-pretty
+                     , bytestring
                      , data-default
                      , hedgehog >=0.5.3 && <0.6
+                     , lens
+                     , lens-aeson
                      , melon
                      , path
                      , path-io
+                     , unordered-containers
+                     , vector
                      , web3 >=0.7.1 && <0.8
   ghc-options:         -Wall -threaded
   hs-source-dirs:      app
