@@ -3,15 +3,11 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | Defines calls to external processes to setup the test environment.
-module Melon.External
-  ( Config (..)
-  , withTestEnv
-  , setupTestFund
-  ) where
+module Melon.External where
 
 import Control.Exception.Safe (Exception (..), throwIO)
 import Control.Lens
-import Control.Monad ((>=>), void)
+import Control.Monad (void)
 import qualified Data.Aeson as Json
 import qualified Data.Aeson.Casing as Json
 import qualified Data.ByteString.Lazy as LBS
@@ -20,7 +16,6 @@ import GHC.Generics
 import Network.Ethereum.ABI.Prim.Address
 import Path
 import System.Exit
-import System.IO (Handle)
 import System.Process
   ( CreateProcess (..)
   , StdStream (..)
@@ -56,6 +51,9 @@ instance Exception ExternalError where
     SetupTestFundFailed ec ->
       "Failed to set-up the test fund. Failed with exit-code "
       ++ show ec ++ "."
+    ParseTestFundFailed msg ->
+      "Failed to parse result of test fund setup: "
+      ++ msg
 
 -- | Start a @npm run devchain@ in the background
 -- and execute the given action while it is running.
@@ -75,7 +73,7 @@ aesonOptions :: Json.Options
 aesonOptions = Json.aesonPrefix Json.snakeCase
 
 -- | A fund object, called "version" in the smart-contracts tests.
-data FundVersion = FundVersion
+newtype FundVersion = FundVersion
   { _fvAddress :: Address
     -- ^ The address of the fund.
   } deriving (Generic, Show)
@@ -83,7 +81,7 @@ instance Json.FromJSON FundVersion where
   parseJSON = Json.genericParseJSON aesonOptions
 
 -- | Outcome of setting up a test fund.
-data TestFund = TestFund
+newtype TestFund = TestFund
   { _tfVersion :: FundVersion
     -- ^ A fund object, called "version" in the smart-contracts tests.
   } deriving (Generic, Show)
