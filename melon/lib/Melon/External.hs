@@ -1,5 +1,7 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | Defines calls to external processes to setup the test environment.
@@ -72,21 +74,27 @@ withTestEnv cfg action = withCreateProcess testEnvProc $ \_ _ _ ph -> do
 aesonOptions :: Json.Options
 aesonOptions = Json.aesonPrefix Json.snakeCase
 
--- | A fund object, called "version" in the smart-contracts tests.
-newtype FundVersion = FundVersion
-  { _fvAddress :: Address
-    -- ^ The address of the fund.
+-- | An asset on the fund
+newtype FundAsset = FundAsset
+  { _faAddress :: Address
+    -- ^ The address of the asset.
   } deriving (Generic, Show)
-instance Json.FromJSON FundVersion where
+instance Json.FromJSON FundAsset where
   parseJSON = Json.genericParseJSON aesonOptions
+instance Json.ToJSON FundAsset where
+  toJSON = Json.genericToJSON aesonOptions
 
 -- | Outcome of setting up a test fund.
-newtype TestFund = TestFund
-  { _tfVersion :: FundVersion
-    -- ^ A fund object, called "version" in the smart-contracts tests.
+data TestFund = TestFund
+  { _tfAddress :: Address
+    -- ^ Address of the fund.
+  , _tfMlnToken :: FundAsset
+    -- ^ Melon token test asset.
   } deriving (Generic, Show)
 instance Json.FromJSON TestFund where
   parseJSON = Json.genericParseJSON aesonOptions
+instance Json.ToJSON TestFund where
+  toJSON = Json.genericToJSON aesonOptions
 
 -- | Deploy the test fund.
 setupTestFund :: Config -> IO TestFund
@@ -103,5 +111,5 @@ setupTestFund cfg = withCreateProcess setupTestFundProc $
       (proc "/usr/bin/env" ["npm", "run", "-s", "setupfund"])
       { std_out = CreatePipe }
 
-makeLenses ''FundVersion
+makeLenses ''FundAsset
 makeLenses ''TestFund
