@@ -7,7 +7,7 @@
 
 module Melon.ABI.Fund where
 
-import Network.Ethereum.ABI.Prim.Bool
+import Network.Ethereum.ABI.Prim.Bool ()
 import Network.Ethereum.Contract.TH
 
 -- | Human readable listing of the smart-contract ABI.
