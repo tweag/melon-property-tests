@@ -5,7 +5,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Melon.ABI.Fund where
+module Melon.ABI.Asset where
 
 import Network.Ethereum.ABI.Prim.Bool ()
 import Network.Ethereum.Contract.TH
@@ -14,8 +14,8 @@ import Network.Ethereum.Contract.TH
 --
 -- View it using @'putStrLn' 'abiOverview'@.
 abiOverview :: String
-abiOverview = [abiFrom|../smart-contracts/out/Fund.abi|]
+abiOverview = [abiFrom|../smart-contracts/out/Asset.abi|]
 
 -- Note the path is relative to the Haskell project root,
 -- i.e. the directory containing the file @melon.cabal@.
-[abiFrom|../smart-contracts/out/Fund.abi|]
+[abiFrom|../smart-contracts/out/Asset.abi|]

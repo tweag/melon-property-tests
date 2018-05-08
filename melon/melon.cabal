@@ -16,7 +16,10 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Melon.ABI.Fund
+  exposed-modules:     Melon.ABI.Asset
+                       Melon.ABI.CanonicalPriceFeed
+                       Melon.ABI.Fund
+                       Melon.Config
                        Melon.External
   -- other-modules:
   -- other-extensions:
