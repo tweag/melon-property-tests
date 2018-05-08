@@ -1,6 +1,7 @@
-{ mkDerivation, aeson, aeson-casing, aeson-pretty, base, bytestring
-, data-default, hedgehog, lens, lens-aeson, path, path-io, process
-, safe-exceptions, stdenv, unordered-containers, vector, web3
+{ mkDerivation, aeson, aeson-casing, aeson-pretty, async, base
+, bytestring, data-default, hedgehog, lens, lens-aeson, mtl, path
+, path-io, process, safe-exceptions, stdenv, unordered-containers
+, vector, web3
 }:
 mkDerivation {
   pname = "melon";
@@ -13,8 +14,8 @@ mkDerivation {
     safe-exceptions web3
   ];
   executableHaskellDepends = [
-    aeson aeson-pretty base bytestring data-default hedgehog lens
-    lens-aeson path path-io unordered-containers vector web3
+    aeson aeson-pretty async base bytestring data-default hedgehog lens
+    lens-aeson mtl path path-io unordered-containers vector web3
   ];
   description = "Property based random tests for Melon smart-contract";
   license = stdenv.lib.licenses.gpl3;
