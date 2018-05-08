@@ -30,6 +30,7 @@ library
                      , lens
                      , lens-aeson
                      , path
+                     , path-io
                      , process
                      , safe-exceptions
                      , web3 >=0.7.1 && <0.8

@@ -13,10 +13,13 @@ import Control.Monad (void)
 import qualified Data.Aeson as Json
 import qualified Data.Aeson.Casing as Json
 import qualified Data.ByteString.Lazy as LBS
+import Data.Maybe (fromMaybe)
 import Data.Typeable
 import GHC.Generics
 import Network.Ethereum.ABI.Prim.Address
 import Path
+import Path.IO
+import System.Environment (lookupEnv)
 import System.Exit
 import System.Process
   ( CreateProcess (..)
@@ -88,6 +91,8 @@ instance Json.ToJSON FundAsset where
 data TestFund = TestFund
   { _tfAddress :: Address
     -- ^ Address of the fund.
+  , _tfEthToken :: FundAsset
+    -- ^ Ether test asset.
   , _tfMlnToken :: FundAsset
     -- ^ Melon token test asset.
   } deriving (Generic, Show)
@@ -110,6 +115,16 @@ setupTestFund cfg = withCreateProcess setupTestFundProc $
     setupTestFundProc = configure cfg
       (proc "/usr/bin/env" ["npm", "run", "-s", "setupfund"])
       { std_out = CreatePipe }
+
+-- | URI of the Web3 provider HTTP interface
+rpcUri :: IO String
+rpcUri = fromMaybe "http://localhost:8545" <$> lookupEnv "WEB3_PROVIDER"
+
+-- | Directory of the smart-contracts sources.
+smartContractsDir :: IO (Path Abs Dir)
+smartContractsDir = do
+  raw <- fromMaybe "../smart-contracts" <$> lookupEnv "SMART_CONTRACTS_DIR"
+  resolveDir' raw
 
 makeLenses ''FundAsset
 makeLenses ''TestFund
