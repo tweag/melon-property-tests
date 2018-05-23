@@ -1,6 +1,7 @@
 { mkDerivation, aeson, aeson-casing, aeson-pretty, async, base
-, bytestring, data-default, hedgehog, lens, lens-aeson, mtl, path
-, path-io, process, safe-exceptions, stdenv, unordered-containers
+, bytestring, data-default, file-embed, generics-sop, hedgehog
+, lens, lens-aeson, memory, mtl, path, path-io, process
+, safe-exceptions, stdenv, text, transformers, unordered-containers
 , vector, web3
 }:
 mkDerivation {
@@ -10,8 +11,9 @@ mkDerivation {
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [
-    aeson aeson-casing base bytestring lens lens-aeson path process
-    safe-exceptions web3
+    aeson aeson-casing base bytestring data-default file-embed
+    generics-sop hedgehog lens lens-aeson memory path path-io process
+    safe-exceptions text transformers web3
   ];
   executableHaskellDepends = [
     aeson aeson-pretty async base bytestring data-default hedgehog lens
