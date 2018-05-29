@@ -11,6 +11,7 @@ import Data.Typeable (Typeable)
 import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Bytes (Bytes)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
+import Network.Ethereum.Web3.Provider (Web3)
 import Network.Ethereum.Web3.Types (Call (..))
 
 import qualified Melon.ABI.System.Governance as Governance
@@ -83,7 +84,7 @@ governanceAction
   -> Address -- ^ Target contract address
   -> Bytes -- ^ Encoded call data
   -> UIntN 256 -- ^ Call value
-  -> MelonM ()
+  -> MelonT Web3 ()
 governanceAction governance governor target calldata value
   = withContext $ \ctx -> do
 

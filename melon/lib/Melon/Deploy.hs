@@ -51,10 +51,10 @@ mockAddress :: Address
 mockAddress = "0x083c41ea13af6c2d5aaddf6e73142eb9a7b00183"
 
 
-deploy :: IO ()
+deploy :: IO (Address, Address, [Address])
 deploy = do
   hSetBuffering stdout LineBuffering
-  (print =<<) $ runWeb3 $ runMelonM $ do
+  r <- runWeb3 $ runMelonT $ do
     owner:manager:investorA:_ <- liftWeb3 accounts
 
     defaultCall <- withContext $ \ctx -> pure (ctx^.ctxCall)
@@ -457,8 +457,12 @@ deploy = do
     liftIO $ putStrLn $ "totalSupply: " ++ show supply'
 
     forM_ [("MLN-T", mlnToken), ("ETH-T", ethToken), ("EUR-T", eurToken)] $ \(sym, token) -> do
-      balance <- liftWeb3 $ Fund.balanceOf callFund token
+      balance <- liftWeb3 $ Asset.balanceOf defaultCall { callTo = Just token } fund
       liftIO $ putStrLn $ sym ++ "(" ++ show token ++ "): " ++ "balance: " ++ show balance
 
     liftIO $ putStrLn "done"
-    return ()
+    return (fund, canonicalPriceFeed, [mlnToken, ethToken, eurToken])
+
+  case r of
+    Left err -> error $ "deploy failed: " ++ show err
+    Right x -> return x

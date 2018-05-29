@@ -3,44 +3,56 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Melon.Context
-  ( MelonM (..)
-  , runMelonM
+  ( MelonT (..)
+  , runMelonT
   , withContext
   , liftWeb3
+  , hoistWeb3
+  , runWeb3Throw
 
   , Context (..)
   , ctxCall
   ) where
 
-import Control.Exception.Safe (MonadThrow)
+import Control.Exception.Safe (MonadCatch, MonadThrow, throw)
 import Control.Lens.TH (makeClassy)
+import Control.Monad ((<=<))
 import Control.Monad.IO.Class (MonadIO)
-import Control.Monad.Reader (MonadReader, ReaderT (..), lift)
+import Control.Monad.Morph (MFunctor (..))
+import Control.Monad.Reader (MonadReader, ReaderT (..))
+import Control.Monad.Trans.Class (MonadTrans (..))
 import Data.Default (def)
 import GHC.Generics (Generic)
-import Network.Ethereum.Web3.Provider (Web3)
+import Hedgehog (MonadTest)
+import Network.Ethereum.Web3.Provider (Web3, runWeb3)
 import Network.Ethereum.Web3.Types (Call (..))
 
 
-newtype MelonM a = MelonM { unMelonM :: ReaderT Context Web3 a }
+newtype MelonT m a = MelonT { unMelonT :: ReaderT Context m a }
   deriving
-    ( Functor, Applicative, Monad
-    , MonadIO, MonadReader Context, MonadThrow
+    ( Functor, Applicative, Monad, MonadTrans, MFunctor
+    , MonadIO, MonadReader Context, MonadCatch, MonadThrow, MonadTest
     )
 
-runMelonM :: MelonM a -> Web3 a
-runMelonM (MelonM action) = runReaderT action Context
+runMelonT :: MelonT m a -> m a
+runMelonT (MelonT action) = runReaderT action Context
   { _ctxCall = def
       { callGas = Just 6900000
       , callGasPrice = Just 100000000000
       }
   }
 
-withContext :: (Context -> Web3 a) -> MelonM a
-withContext = MelonM . ReaderT
+withContext :: (Context -> m a) -> MelonT m a
+withContext = MelonT . ReaderT
 
-liftWeb3 :: Web3 a -> MelonM a
-liftWeb3 = MelonM . lift
+liftWeb3 :: Web3 a -> MelonT Web3 a
+liftWeb3 = lift
+
+runWeb3Throw :: (MonadIO m, MonadThrow m) => Web3 a -> m a
+runWeb3Throw = either throw return <=< runWeb3
+
+hoistWeb3 :: (MonadIO m, MonadThrow m) => MelonT Web3 a -> MelonT m a
+hoistWeb3 = hoist runWeb3Throw
 
 
 -- | Common context required for interaction with the Melon contract.

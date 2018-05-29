@@ -13,6 +13,7 @@ import qualified Data.Map.Lazy as Map
 import Data.Typeable (Typeable)
 import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
+import Network.Ethereum.Web3.Provider (Web3)
 import Network.Ethereum.Web3.Types (Call (..))
 
 import Melon.Context
@@ -43,7 +44,7 @@ updateCanonicalPriceFeed
   -> Address -- ^ Contract owner address
   -> String -- ^ Quote asset name on cryptocompare
   -> [(String, Address, UIntN 256)] -- ^ List of tokens (name on cryptocompare, address, decimals)
-  -> MelonM ()
+  -> MelonT Web3 ()
 updateCanonicalPriceFeed canonical staking owner quote tokens =
   withContext $ \ctx -> do
 

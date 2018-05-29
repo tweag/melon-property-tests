@@ -60,6 +60,7 @@ library
                      , lens
                      , lens-aeson
                      , memory
+                     , mmorph
                      , mtl
                      , path
                      , path-io
