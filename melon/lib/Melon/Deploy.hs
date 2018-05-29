@@ -286,6 +286,7 @@ deploy = do
             stakingPriceFeed
             owner
             "MLN"
+            18
             [ ("MLN", mlnToken, 18)
             , ("ETH", ethToken, 18)
             , ("EUR", eurToken,  8)
@@ -459,6 +460,8 @@ deploy = do
     forM_ [("MLN-T", mlnToken), ("ETH-T", ethToken), ("EUR-T", eurToken)] $ \(sym, token) -> do
       balance <- liftWeb3 $ Asset.balanceOf defaultCall { callTo = Just token } fund
       liftIO $ putStrLn $ sym ++ "(" ++ show token ++ "): " ++ "balance: " ++ show balance
+
+    updatePriceFeed
 
     liftIO $ putStrLn "done"
     return (fund, canonicalPriceFeed, [mlnToken, ethToken, eurToken])
