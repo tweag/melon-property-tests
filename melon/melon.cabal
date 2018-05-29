@@ -16,24 +16,58 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Melon.ABI.Asset
-                       Melon.ABI.CanonicalPriceFeed
+  exposed-modules:     Melon.ABI.Assets.Asset
+                       Melon.ABI.Assets.ERC223Interface
+                       Melon.ABI.Assets.PreminedAsset
+                       Melon.ABI.Compliance.NoCompliance
+                       Melon.ABI.Exchange.Adapter.CentralizedAdapter
+                       Melon.ABI.Exchange.Adapter.MatchingMarketAdapter
+                       Melon.ABI.Exchange.Adapter.SimpleAdapter
+                       Melon.ABI.Exchange.ThirdParty.MatchingMarket
+                       Melon.ABI.Exchange.ThirdParty.SimpleMarket
                        Melon.ABI.Fund
-                       Melon.Config
-                       Melon.External
-  -- other-modules:
+                       Melon.ABI.FundRanking
+                       Melon.ABI.PriceFeeds.CanonicalPriceFeed
+                       Melon.ABI.PriceFeeds.PriceFeed
+                       Melon.ABI.PriceFeeds.StakingPriceFeed
+                       Melon.ABI.RiskMgmt.RMMakeOrders
+                       Melon.ABI.System.Governance
+                       Melon.ABI.Version.Version
+                       Melon.Context
+                       Melon.Contract.Governance
+                       Melon.Contract.PriceFeed
+                       Melon.Contract.TermsAndConditions
+                       Melon.Deploy
+                       Melon.Test.Commands
+                       Melon.Test.Model
+                       Melon.ThirdParty.Network.Ethereum.ABI.Codec
+                       Melon.ThirdParty.Network.Ethereum.ABI.Event
+                       Melon.ThirdParty.Network.Ethereum.Web3.Eth
+  other-modules:       Melon.TH
   -- other-extensions:
   build-depends:       base >=4.10 && <4.11
                      , aeson
                      , aeson-casing
+                     , aeson-pretty
+                     , async
                      , bytestring
+                     , containers
+                     , cryptocompare
                      , data-default
+                     , file-embed
+                     , generics-sop
+                     , hedgehog >=0.5.3 && <0.6
                      , lens
                      , lens-aeson
+                     , memory
+                     , mtl
                      , path
                      , path-io
                      , process
                      , safe-exceptions
+                     , template-haskell
+                     , text
+                     , transformers
                      , web3 >=0.7.1 && <0.8
   ghc-options:         -Wall
   hs-source-dirs:      lib

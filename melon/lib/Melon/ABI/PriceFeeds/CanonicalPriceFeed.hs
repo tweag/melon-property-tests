@@ -5,9 +5,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Melon.ABI.Fund where
+module Melon.ABI.PriceFeeds.CanonicalPriceFeed where
 
 import Data.Semigroup ((<>))
+import Data.Text (Text)
 import qualified Generics.SOP.Universe
 import GHC.Generics (Generic)
 import Network.Ethereum.ABI.Class (ABIGet, ABIPut, ABIType (isDynamic))
@@ -23,19 +24,23 @@ import Network.Ethereum.Web3.Types (Call (..), Hash)
 import Melon.TH
 
 
-[melonAbiFrom|Fund|]
+[melonAbiFrom|pricefeeds/CanonicalPriceFeed|]
 
 data Constructor
   = Constructor
       Address
       (BytesN 32)
-      Address
+      (BytesN 8)
       (UIntN 256)
-      (UIntN 256)
+      Text
+      Text
       Address
       Address
+      [UIntN 256]
+      [BytesN 4]
+      [UIntN 256]
+      [UIntN 256]
       Address
-      [Address]
   deriving Generic
 instance Generics.SOP.Universe.Generic Constructor
 instance ABIGet Constructor
@@ -49,36 +54,47 @@ constructor
   :: Call
   -> Address
   -> BytesN 32
-  -> Address
+  -> BytesN 8
   -> UIntN 256
-  -> UIntN 256
+  -> Text
+  -> Text
   -> Address
   -> Address
+  -> [UIntN 256]
+  -> [BytesN 4]
+  -> [UIntN 256]
+  -> [UIntN 256]
   -> Address
-  -> [Address]
   -> Web3 Hash
-constructor
-  call'
-  ofManager'
-  withName'
+constructor call'
   ofQuoteAsset'
-  ofManagementFee'
-  ofPerformanceFee'
-  ofCompliance'
-  ofRiskMgmt'
-  ofPriceFeed'
-  ofExchanges'
+  quoteAssetName'
+  quoteAssetSymbol'
+  quoteAssetDecimals'
+  quoteAssetUrl'
+  quoteAssetIpfsHash'
+  quoteAssetBreakIn'
+  quoteAssetBreakOut'
+  quoteAssetStandards'
+  quoteAssetFunctionSignatures'
+  updateInfo'
+  stakingInfo'
+  ofGovernance'
   =
   sendTransaction call'
     { callData = Just $ contractBin <> encode (Constructor
-        ofManager'
-        withName'
         ofQuoteAsset'
-        ofManagementFee'
-        ofPerformanceFee'
-        ofCompliance'
-        ofRiskMgmt'
-        ofPriceFeed'
-        ofExchanges')
+        quoteAssetName'
+        quoteAssetSymbol'
+        quoteAssetDecimals'
+        quoteAssetUrl'
+        quoteAssetIpfsHash'
+        quoteAssetBreakIn'
+        quoteAssetBreakOut'
+        quoteAssetStandards'
+        quoteAssetFunctionSignatures'
+        updateInfo'
+        stakingInfo'
+        ofGovernance')
     , callValue = Nothing
     }

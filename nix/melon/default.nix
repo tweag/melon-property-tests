@@ -1,8 +1,8 @@
 { mkDerivation, aeson, aeson-casing, aeson-pretty, async, base
-, bytestring, data-default, file-embed, generics-sop, hedgehog
-, lens, lens-aeson, memory, mtl, path, path-io, process
-, safe-exceptions, stdenv, text, transformers, unordered-containers
-, vector, web3
+, bytestring, containers, cryptocompare, data-default, file-embed
+, generics-sop, hedgehog, lens, lens-aeson, memory, mtl, path
+, path-io, process, safe-exceptions, stdenv, template-haskell, text
+, transformers, unordered-containers, vector, web3
 }:
 mkDerivation {
   pname = "melon";
@@ -11,9 +11,10 @@ mkDerivation {
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [
-    aeson aeson-casing base bytestring data-default file-embed
-    generics-sop hedgehog lens lens-aeson memory path path-io process
-    safe-exceptions text transformers web3
+    aeson aeson-casing aeson-pretty async base bytestring containers
+    cryptocompare data-default file-embed generics-sop hedgehog lens
+    lens-aeson memory mtl path path-io process safe-exceptions
+    template-haskell text transformers web3
   ];
   executableHaskellDepends = [
     aeson aeson-pretty async base bytestring data-default hedgehog lens
