@@ -32,9 +32,11 @@ library
                        Melon.ABI.PriceFeeds.StakingPriceFeed
                        Melon.ABI.RiskMgmt.RMMakeOrders
                        Melon.ABI.System.Governance
+                       Melon.ABI.System.OperatorStaking
                        Melon.ABI.Version.Version
                        Melon.Context
                        Melon.Contract.Governance
+                       Melon.Contract.PreminedAsset
                        Melon.Contract.PriceFeed
                        Melon.Contract.TermsAndConditions
                        Melon.Deploy

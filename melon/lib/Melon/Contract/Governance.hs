@@ -2,7 +2,8 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Melon.Contract.Governance
-  ( governanceAction
+  ( deploy
+  , action
   ) where
 
 import Control.Exception.Safe (Exception (..), throw)
@@ -17,6 +18,62 @@ import Network.Ethereum.Web3.Types (Call (..))
 import qualified Melon.ABI.System.Governance as Governance
 import Melon.Context
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth
+
+
+deploy
+  :: Address
+    -- ^ Owner
+  -> MelonT Web3 Address
+    -- ^ Returns the contract address
+deploy owner = withContext $ \ctx -> do
+  let ownerCall = (ctx^.ctxCall) { callFrom = Just owner }
+      authorities = [owner]
+      quorum = 1
+      window = 100000
+  tx <- Governance.constructor ownerCall authorities quorum window
+  getContractAddress tx
+
+
+-- | Propose, confirm, and trigger governance action.
+-- Only works with quorum of one.
+action
+  :: Address -- ^ Governance contract address
+  -> Address -- ^ Single quorum governor
+  -> Address -- ^ Target contract address
+  -> Bytes -- ^ Encoded call data
+  -> UIntN 256 -- ^ Call value
+  -> MelonT Web3 ()
+action governance governor target calldata value
+  = withContext $ \ctx -> do
+
+  let governorCallGovernance = (ctx^.ctxCall)
+        { callFrom = Just governor
+        , callTo = Just governance
+        }
+  proposeTx <- Governance.propose governorCallGovernance
+    target calldata value
+  proposalId <- getTransactionEvents proposeTx >>= \case
+    [Governance.Proposed proposalId calldata']
+      | calldata' == calldata -> return proposalId
+      | otherwise -> throw ProposedCallDataMismatch
+    [] -> throw NoProposedEvent
+    _ -> throw TooManyProposedEvents
+  confirmTx <- Governance.confirm governorCallGovernance
+    proposalId
+  getTransactionEvents confirmTx >>= \case
+    [Governance.Confirmed proposalId' _]
+      | proposalId' == proposalId -> return ()
+      | otherwise -> throw ConfirmedProposalIdMismatch
+    [] -> throw NoConfirmedEvent
+    _ -> throw TooManyConfirmedEvents
+  triggerTx <- Governance.trigger governorCallGovernance
+    proposalId
+  getTransactionEvents triggerTx >>= \case
+    [Governance.Triggered proposalId']
+      | proposalId' == proposalId -> return ()
+      | otherwise -> throw TriggeredProposalIdMismatch
+    [] -> throw NoTriggeredEvent
+    _ -> throw TooManyTriggeredEvents
 
 
 -- | Errors occurring during governance actions.
@@ -74,45 +131,3 @@ instance Exception GovernanceError where
     TriggeredProposalIdMismatch ->
       "The result `Triggered` event's proposal Id doesn't match the request's\
       \ proposal Id."
-
-
--- | Propose, confirm, and trigger governance action.
--- Only works with quorum of one.
-governanceAction
-  :: Address -- ^ Governance contract address
-  -> Address -- ^ Single quorum governor
-  -> Address -- ^ Target contract address
-  -> Bytes -- ^ Encoded call data
-  -> UIntN 256 -- ^ Call value
-  -> MelonT Web3 ()
-governanceAction governance governor target calldata value
-  = withContext $ \ctx -> do
-
-  let governorCallGovernance = (ctx^.ctxCall)
-        { callFrom = Just governor
-        , callTo = Just governance
-        }
-  proposeTx <- Governance.propose governorCallGovernance
-    target calldata value
-  proposalId <- getTransactionEvents proposeTx >>= \case
-    [Governance.Proposed proposalId calldata']
-      | calldata' == calldata -> return proposalId
-      | otherwise -> throw ProposedCallDataMismatch
-    [] -> throw NoProposedEvent
-    _ -> throw TooManyProposedEvents
-  confirmTx <- Governance.confirm governorCallGovernance
-    proposalId
-  getTransactionEvents confirmTx >>= \case
-    [Governance.Confirmed proposalId' _]
-      | proposalId' == proposalId -> return ()
-      | otherwise -> throw ConfirmedProposalIdMismatch
-    [] -> throw NoConfirmedEvent
-    _ -> throw TooManyConfirmedEvents
-  triggerTx <- Governance.trigger governorCallGovernance
-    proposalId
-  getTransactionEvents triggerTx >>= \case
-    [Governance.Triggered proposalId']
-      | proposalId' == proposalId -> return ()
-      | otherwise -> throw TriggeredProposalIdMismatch
-    [] -> throw NoTriggeredEvent
-    _ -> throw TooManyTriggeredEvents

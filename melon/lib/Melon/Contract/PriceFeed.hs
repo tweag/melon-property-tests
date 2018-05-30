@@ -2,7 +2,10 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Melon.Contract.PriceFeed
-  ( updateCanonicalPriceFeed
+  ( deploy
+  , deployCanonicalPriceFeed
+  , deployStakingPriceFeed
+  , updateCanonicalPriceFeed
   ) where
 
 import Control.Exception.Safe (Exception (..), throw)
@@ -23,24 +26,138 @@ import Numeric.Decimal
 import Text.Read (readMaybe)
 
 import Melon.Context
+import qualified Melon.ABI.Assets.Asset as Asset
 import qualified Melon.ABI.PriceFeeds.CanonicalPriceFeed as CanonicalPriceFeed
 import qualified Melon.ABI.PriceFeeds.StakingPriceFeed as StakingPriceFeed
+import qualified Melon.ABI.System.OperatorStaking as OperatorStaking
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 
 
-data PriceFeedError
-  = CryptoCompareInvalidResult String
-  | CryptoCompareMissingCurrency
-  | ExpectedOnePriceUpdateEvent
-  deriving (Show, Typeable)
-instance Exception PriceFeedError where
-  displayException = \case
-    CryptoCompareInvalidResult msg ->
-      "Price lookup on cryptocompare returned an invalid result: " ++ msg
-    CryptoCompareMissingCurrency ->
-      "Price lookup on cryptocompare was missing a currency."
-    ExpectedOnePriceUpdateEvent ->
-      "Expected exactly one `PriceUpdate` event."
+deploy
+  :: Address
+    -- ^ Owner
+  -> Address
+    -- ^ Melon token address
+  -> Address
+    -- ^ Governance contract address
+  -> MelonT Web3 (Address, Address)
+    -- ^ Returns canonical and staking price feed addresses
+deploy owner mlnToken governance = do
+  canonicalPriceFeed <- deployCanonicalPriceFeed owner mlnToken governance
+  stakingPriceFeed <- deployStakingPriceFeed owner mlnToken canonicalPriceFeed
+
+  defaultCall <- view ctxCall
+  let ownerCall = defaultCall { callFrom = Just owner }
+      amountToStake = 1000000 :: UIntN 256
+
+  -- Approve staking price feed spending
+  let ownerCallMln = ownerCall { callTo = Just mlnToken }
+  liftWeb3 $
+    Asset.approve ownerCallMln stakingPriceFeed amountToStake
+    >>= getTransactionEvents >>= \case
+      [Asset.Approval {}] -> pure ()
+      _ -> throw FailedToApproveStakingPriceFeed
+
+  -- Deposit stake on staking price feed
+  let ownerCallStaking = ownerCall { callTo = Just stakingPriceFeed }
+  liftWeb3 $
+    StakingPriceFeed.depositStake ownerCallStaking amountToStake ""
+    >>= getTransactionEvents >>= \case
+      [OperatorStaking.Staked {}] -> pure ()
+      _ -> throw FailedToDepositStake
+
+  pure (canonicalPriceFeed, stakingPriceFeed)
+
+deployCanonicalPriceFeed
+  :: Address
+    -- ^ Owner
+  -> Address
+    -- ^ Melon token address
+  -> Address
+    -- ^ Governance contract address
+  -> MelonT Web3 Address
+    -- ^ Returns price feed address
+deployCanonicalPriceFeed owner mlnToken governance = withContext $ \ctx -> do
+  let ownerCall = (ctx^.ctxCall) { callFrom = Just owner }
+  tx <- CanonicalPriceFeed.constructor ownerCall
+    mlnToken -- quote asset
+    "Melon Token" -- quote asset name
+    "MLN-T" -- quote asset symbol
+    18 -- quote asset decimal places
+    "melonport.com" -- quote asset related URL
+    mockBytes -- quote asset IPFS hash
+    mockAddress -- quote asset break-in address
+    mockAddress -- quote asset break-out address
+    [] -- quote asset EIP standards
+    [] -- quote asset white listed functions
+    [0, 60] -- update-info: interval, validity
+    [1000000, 4] -- staking-info: minStake, numOperators
+    governance -- address of Governance
+  getContractAddress tx
+
+deployStakingPriceFeed
+  :: Address
+    -- ^ Owner
+  -> Address
+    -- ^ Melon token address
+  -> Address
+    -- ^ CanonicalPriceFeed address
+  -> MelonT Web3 Address
+    -- ^ Returns price feed address
+deployStakingPriceFeed owner mlnToken canonicalPriceFeed = withContext $ \ctx -> do
+  let ownerCall = (ctx^.ctxCall) { callFrom = Just owner }
+  tx <- StakingPriceFeed.constructor ownerCall
+    canonicalPriceFeed -- canonical registrar address
+    mlnToken -- quote asset
+    canonicalPriceFeed -- superfeed address
+  getContractAddress tx
+
+
+mockBytes :: T.Text
+mockBytes = "0x86b5eed81db5f691c36cc83eb58cb5205bd2090bf3763a19f0c5bf2f074dd84b"
+
+mockAddress :: Address
+mockAddress = "0x083c41ea13af6c2d5aaddf6e73142eb9a7b00183"
+
+
+
+-- | Fetch current prices from cryptocompare and update the price-feed.
+updateCanonicalPriceFeed
+  :: Address -- ^ CanonicalPriceFeed contract address
+  -> Address -- ^ StakingPriceFeed contract address
+  -> Address -- ^ Contract owner address
+  -> T.Text -- ^ Quote asset name on cryptocompare
+  -> Integer -- ^ Quote asset decimals
+  -> [(T.Text, Address, Integer)] -- ^ List of tokens (name on cryptocompare, address, decimals)
+  -> MelonT Web3 ()
+updateCanonicalPriceFeed canonical staking owner quoteName quoteDecimals tokens =
+  withContext $ \ctx -> do
+
+  let namesDecimals = [ (name, decimals) | (name, _, decimals) <- tokens ]
+      assets = [ addr | (_, addr, _) <- tokens ]
+  prices <- liftIO $ getConvertedPrices quoteName quoteDecimals namesDecimals
+
+  let ownerCallStaking = (ctx^.ctxCall)
+        { callFrom = Just owner
+        , callTo = Just staking
+        }
+  StakingPriceFeed.update ownerCallStaking
+    assets -- list of asset addresses
+    prices -- list of asset prices
+    >>= getTransactionEvents >>= \case
+      [StakingPriceFeed.PriceUpdated _] -> pure ()
+      _ -> throw ExpectedOnePriceUpdateEvent
+
+  let ownerCallCanonical = (ctx^.ctxCall)
+        { callFrom = Just owner
+        , callTo = Just canonical
+        }
+  CanonicalPriceFeed.collectAndUpdate ownerCallCanonical
+    assets -- list of asset addresses
+    >>= getTransactionEvents >>= \case
+      [CanonicalPriceFeed.PriceUpdated _] -> pure ()
+      _ -> throw ExpectedOnePriceUpdateEvent
+  pure ()
 
 
 type BigNumber = Decimal P18 RoundHalfUp
@@ -101,40 +218,22 @@ getConvertedPrices quoteName quoteDecimals tokens = do
 -- getConvertedPrices _ _ _ = error "[getConvertedPrices (dummy)] Invalid input."
 
 
--- | Fetch current prices from cryptocompare and update the price-feed.
-updateCanonicalPriceFeed
-  :: Address -- ^ CanonicalPriceFeed contract address
-  -> Address -- ^ StakingPriceFeed contract address
-  -> Address -- ^ Contract owner address
-  -> T.Text -- ^ Quote asset name on cryptocompare
-  -> Integer -- ^ Quote asset decimals
-  -> [(T.Text, Address, Integer)] -- ^ List of tokens (name on cryptocompare, address, decimals)
-  -> MelonT Web3 ()
-updateCanonicalPriceFeed canonical staking owner quoteName quoteDecimals tokens =
-  withContext $ \ctx -> do
-
-  let namesDecimals = [ (name, decimals) | (name, _, decimals) <- tokens ]
-      assets = [ addr | (_, addr, _) <- tokens ]
-  prices <- liftIO $ getConvertedPrices quoteName quoteDecimals namesDecimals
-
-  let ownerCallStaking = (ctx^.ctxCall)
-        { callFrom = Just owner
-        , callTo = Just staking
-        }
-  StakingPriceFeed.update ownerCallStaking
-    assets -- list of asset addresses
-    prices -- list of asset prices
-    >>= getTransactionEvents >>= \case
-      [StakingPriceFeed.PriceUpdated _] -> pure ()
-      _ -> throw ExpectedOnePriceUpdateEvent
-
-  let ownerCallCanonical = (ctx^.ctxCall)
-        { callFrom = Just owner
-        , callTo = Just canonical
-        }
-  CanonicalPriceFeed.collectAndUpdate ownerCallCanonical
-    assets -- list of asset addresses
-    >>= getTransactionEvents >>= \case
-      [CanonicalPriceFeed.PriceUpdated _] -> pure ()
-      _ -> throw ExpectedOnePriceUpdateEvent
-  pure ()
+data PriceFeedError
+  = CryptoCompareInvalidResult String
+  | CryptoCompareMissingCurrency
+  | ExpectedOnePriceUpdateEvent
+  | FailedToApproveStakingPriceFeed
+  | FailedToDepositStake
+  deriving (Show, Typeable)
+instance Exception PriceFeedError where
+  displayException = \case
+    CryptoCompareInvalidResult msg ->
+      "Price lookup on cryptocompare returned an invalid result: " ++ msg
+    CryptoCompareMissingCurrency ->
+      "Price lookup on cryptocompare was missing a currency."
+    ExpectedOnePriceUpdateEvent ->
+      "Expected exactly one `PriceUpdate` event."
+    FailedToApproveStakingPriceFeed ->
+      "Failed to approve staking price feed."
+    FailedToDepositStake ->
+      "Failed to deposity stake on staking price feed."
