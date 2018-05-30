@@ -217,7 +217,10 @@ deploy = do
           eurToken -- asset address
           "Euro token" -- asset name
           "EUR-T" -- asset symbol
-          8 -- asset decimal places
+          -- XXX: Should this be 8 or 18?
+          --   The EUR token is specified to have 8 decimals. But, the
+          --   javascript code sets this value to 18 nonetheless.
+          18 -- asset decimal places
           "europa.eu" -- asset related URL
           mockBytes -- asset IPFS hash
           mockAddress -- asset break-in address
