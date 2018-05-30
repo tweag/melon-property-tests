@@ -8,6 +8,7 @@ module Melon.Contract.PriceFeed
   , deployCanonicalPriceFeed
   , deployStakingPriceFeed
   , updateCanonicalPriceFeed
+  , makeConstantConvertedPrices
   ) where
 
 import Control.Exception.Safe (Exception (..), throw)
@@ -121,23 +122,24 @@ mockBytes = "0x86b5eed81db5f691c36cc83eb58cb5205bd2090bf3763a19f0c5bf2f074dd84b"
 mockAddress :: Address
 mockAddress = "0x083c41ea13af6c2d5aaddf6e73142eb9a7b00183"
 
+-- | A price source
+--
+-- Takes @quoteName quoteDecimals tokens@(name, decimals)@
+-- and returns the list of prices.
+type PriceSource = IO [UIntN 256]
 
-
--- | Fetch current prices from cryptocompare and update the price-feed.
+-- | Fetch current prices from the given source and update the price-feed.
 updateCanonicalPriceFeed
-  :: Address -- ^ CanonicalPriceFeed contract address
+  :: PriceSource
+  -> Address -- ^ CanonicalPriceFeed contract address
   -> Address -- ^ StakingPriceFeed contract address
   -> Address -- ^ Contract owner address
-  -> T.Text -- ^ Quote asset name on cryptocompare
-  -> Integer -- ^ Quote asset decimals
-  -> [(T.Text, Address, Integer)] -- ^ List of tokens (name on cryptocompare, address, decimals)
+  -> [Address] -- ^ List of token addresses
   -> MelonT Web3 ()
-updateCanonicalPriceFeed canonical staking owner quoteName quoteDecimals tokens =
+updateCanonicalPriceFeed source canonical staking owner assets =
   withContext $ \ctx -> do
 
-  let namesDecimals = [ (name, decimals) | (name, _, decimals) <- tokens ]
-      assets = [ addr | (_, addr, _) <- tokens ]
-  prices <- liftIO $ getConvertedPrices quoteName quoteDecimals namesDecimals
+  prices <- liftIO source
 
   let ownerCallStaking = (ctx^.ctxCall)
         { callFrom = Just owner
@@ -168,11 +170,12 @@ roundTo15 :: BigNumber -> BigNumber
 roundTo15 = cast . (cast :: Decimal P18 RoundHalfUp -> Decimal P15 RoundHalfUp)
 
 
+-- | Fetches fresh prices from crypto compare.
 getConvertedPrices
   :: T.Text -- ^ Quote asset name on cryptocompare
   -> Integer -- ^ Quote asset decimals
   -> [(T.Text, Integer)] -- ^ List of tokens (name on cryptocompare, decimals)
-  -> IO [UIntN 256]
+  -> PriceSource -- ^ Returns list of prices (in tokens order)
 getConvertedPrices quoteName quoteDecimals tokens = do
   priceMap <- do
     let names = map fst tokens
@@ -190,6 +193,18 @@ getConvertedPrices quoteName quoteDecimals tokens = do
                 divided = inverse / (10^^(decimals - quoteDecimals))
             in truncate $ divided * (10^^decimals)
   maybe (throw CryptoCompareMissingCurrency) return mbPrices
+
+
+-- | Fetches fresh prices from crypto compare
+-- and returns a function that will always return these prices.
+makeConstantConvertedPrices
+  :: T.Text -- ^ Quote asset name on cryptocompare
+  -> Integer -- ^ Quote asset decimals
+  -> [(T.Text, Integer)] -- ^ List of tokens (name on cryptocompare, decimals)
+  -> IO PriceSource
+makeConstantConvertedPrices quoteName quoteDecimals tokens = do
+  prices <- getConvertedPrices quoteName quoteDecimals tokens
+  pure $ pure prices
 
 
 -- | Dummy price-feed update that just returns constants.
@@ -223,6 +238,7 @@ getConvertedPrices quoteName quoteDecimals tokens = do
 data PriceFeedError
   = CryptoCompareInvalidResult String
   | CryptoCompareMissingCurrency
+  | ConstantMissingCurrency
   | ExpectedOnePriceUpdateEvent
   | FailedToApproveStakingPriceFeed
   | FailedToDepositStake
@@ -233,6 +249,8 @@ instance Exception PriceFeedError where
       "Price lookup on cryptocompare returned an invalid result: " ++ msg
     CryptoCompareMissingCurrency ->
       "Price lookup on cryptocompare was missing a currency."
+    ConstantMissingCurrency ->
+      "Price lookup in constant price-map was missing a currency."
     ExpectedOnePriceUpdateEvent ->
       "Expected exactly one `PriceUpdate` event."
     FailedToApproveStakingPriceFeed ->

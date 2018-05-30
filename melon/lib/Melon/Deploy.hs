@@ -10,6 +10,7 @@ module Melon.Deploy where
 
 import Control.Lens ((^.), to)
 import Control.Monad (forM_, unless, void)
+import Control.Monad.IO.Class (liftIO)
 import qualified Data.HashMap.Strict as HashMap
 import Data.Text (Text)
 import Network.Ethereum.ABI.Prim.Address (Address)
@@ -22,7 +23,7 @@ import qualified Melon.ABI.Assets.PreminedAsset as PreminedAsset
 import qualified Melon.ABI.Fund as Fund
 import Melon.Context
 import qualified Melon.Contract.Fund as Fund
-import Melon.Contract.PriceFeed (updateCanonicalPriceFeed)
+import qualified Melon.Contract.PriceFeed as PriceFeed
 import qualified Melon.Contract.Version as Version
 import Melon.Model
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth
@@ -96,16 +97,13 @@ deploy = do
     -- Initial price feed update
     -- XXX: Should this just happen every 30 seconds or so?
     -- XXX: Replace by mock price feed update.
-    let updatePriceFeed =
-          updateCanonicalPriceFeed
-            canonicalPriceFeed
-            (version^.vdStakingPriceFeed)
-            owner
-            "MLN"
-            18
-            [ (spec^.asCryptoCompareName, address, spec^.asDecimals)
-            | (address, spec) <- HashMap.toList (version^.vdAssets)
-            ]
+    let (assets, assetLookups) = unzip $ HashMap.toList
+          $ (\spec -> (spec^.asCryptoCompareName, spec^.asDecimals))
+          <$> (version^.vdAssets)
+    priceSource <- liftIO $
+      PriceFeed.makeConstantConvertedPrices "MLN" 18 assetLookups
+    let updatePriceFeed = PriceFeed.updateCanonicalPriceFeed
+          priceSource canonicalPriceFeed (version^.vdStakingPriceFeed) owner assets
     updatePriceFeed
 
     ------------------------------------------------------------
