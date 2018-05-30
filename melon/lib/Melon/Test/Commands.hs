@@ -13,6 +13,7 @@ import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Network.Ethereum.ABI.Prim.Address (Address)
+import Network.Ethereum.ABI.Prim.Int (UIntN)
 import Network.Ethereum.Web3.Types (Call (..))
 
 import qualified Melon.ABI.Assets.Asset as Asset
@@ -72,19 +73,26 @@ checkSharePrice fund priceFeed assets =
       let callFund = defaultCall { callTo = Just fund }
       totalShares <- liftWeb3 $ Fund.totalSupply callFund
       sharePrice <- liftWeb3 $ Fund.calcSharePrice callFund
+      decimals <- liftWeb3 $ Fund.getDecimals callFund
 
-      pure (prices, balances, totalShares, sharePrice)
+      pure (prices, balances, totalShares, sharePrice, decimals)
   in
   Command gen execute
-    [ Ensure $ \_prior _after CheckSharePrice (prices, balances, totalShares, sharePrice) -> do
+    [ Ensure $ \_prior _after CheckSharePrice
+      (prices, balances, totalShares, sharePrice, decimals) -> do
+        let precision = 8 :: UIntN 256
+            dropDecimals = decimals - precision
+            truncate' = (`div` (10^dropDecimals))
         footnote $ "prices " ++ show prices
         footnote $ "balances " ++ show balances
         footnote $ "totalShares " ++ show totalShares
+        footnote $ "decimals " ++ show decimals
+        footnote $ "dropDecimals " ++ show dropDecimals
         length prices === length balances
         unless (totalShares == 0) $ do
           let calculatedSharePrice =
                 sum (zipWith (*) balances prices)
                 `div`
                 totalShares
-          sharePrice === calculatedSharePrice
+          truncate' sharePrice === truncate' calculatedSharePrice
     ]
