@@ -10,6 +10,7 @@ import qualified Data.Text as T
 import GHC.Generics (Generic)
 import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Bytes (BytesN)
+import Network.Ethereum.ABI.Prim.Int (UIntN)
 
 
 data FundDeployment = FundDeployment
@@ -19,6 +20,8 @@ data FundDeployment = FundDeployment
     _fdManager :: Address
   , -- | Corresponding version deployment.
     _fdVersion :: VersionDeployment
+  , -- | Terms and conditions signature.
+    _fdTermsAndConditions :: (BytesN 32, BytesN 32, UIntN 8)
   } deriving (Generic, Show)
 
 

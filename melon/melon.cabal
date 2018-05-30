@@ -35,6 +35,7 @@ library
                        Melon.ABI.System.OperatorStaking
                        Melon.ABI.Version.Version
                        Melon.Context
+                       Melon.Contract.Fund
                        Melon.Contract.Governance
                        Melon.Contract.PreminedAsset
                        Melon.Contract.PriceFeed

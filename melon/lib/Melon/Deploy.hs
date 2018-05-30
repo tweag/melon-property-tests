@@ -20,12 +20,10 @@ import System.IO
 
 import qualified Melon.ABI.Assets.PreminedAsset as PreminedAsset
 import qualified Melon.ABI.Fund as Fund
--- import qualified Melon.ABI.FundRanking as FundRanking
-import qualified Melon.ABI.Version.Version as Version
 import Melon.Context
+import qualified Melon.Contract.Fund as Fund
 import Melon.Contract.PriceFeed (updateCanonicalPriceFeed)
 import qualified Melon.Contract.Version as Version
-import Melon.Contract.TermsAndConditions
 import Melon.Model
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 
@@ -60,40 +58,18 @@ deploy = do
         investorACall = defaultCall { callFrom = Just investorA }
 
     version <- Version.deploy owner
-    let callVersion = defaultCall { callTo = Just $ version^.vdAddress }
-        mlnToken = version^.vdMlnToken
+    let mlnToken = version^.vdMlnToken
         ownerCallMln = ownerCall { callTo = Just mlnToken }
         nonMlnAssets = filter (/=mlnToken) $ HashMap.keys $ version^.vdAssets
         canonicalPriceFeed = version^.vdCanonicalPriceFeed
 
-    -- XXX: Separate out the following fund setup.
-
-    let managerCallVersion = managerCall { callTo = Just $ version^.vdAddress }
-
     ------------------------------------------------------------
     -- Setup a fund instance
-    (r, s, v) <- liftWeb3 $ getTermsSignatureParameters manager
-    fund <- liftWeb3 $ Version.setupFund managerCallVersion
-      "Test fund" -- fund name
-      mlnToken -- quote asset
-      (10^(16::Int)) -- management fee
-      10 -- performance fee
-      (version^.vdCompliance) -- participation module address
-      (version^.vdRiskManagement) -- risk management module address
-      -- addresses of exchanges where the fund can trade
-      [ version^.vdSimpleMarket.mdMarket
-      , version^.vdMatchingMarket.mdMarket
-      ]
-      v r s -- signature elliptic curve parameters
-      >>= getTransactionEvents >>= \case
-      [Version.FundUpdated fund] -> pure fund
-      _ -> error "Expected one FundUpdated event"
-    fund' <- liftWeb3 $ Version.managerToFunds callVersion manager
-    unless (fund' == fund) $
-      error "Fund address mismatch"
+    -- XXX: Separate out the following fund setup.
+    fund <- Fund.deploy version manager
 
-    let managerCallFund = managerCall { callTo = Just fund }
-        callFund = defaultCall { callTo = Just fund }
+    let managerCallFund = managerCall { callTo = Just $ fund^.fdAddress }
+        callFund = defaultCall { callTo = Just $ fund^.fdAddress }
 
     ------------------------------------------------------------
     -- Enable investment and redemption
@@ -152,7 +128,7 @@ deploy = do
         _ -> error "Initial token transfer failed"
 
     let tradeToken = mlnToken
-        investorACallFund = investorACall { callTo = Just fund }
+        investorACallFund = investorACall { callTo = Just $ fund^.fdAddress }
         investorACallMln = investorACall { callTo = Just mlnToken }
         trades = [ (2000, 2000), (10^(18::Int), 10^(18::Int)), ((10^(18::Int)) `div` 2, 10^(18::Int)) ]
     forM_ trades $ \(shareQuantity, giveQuantity) -> do
@@ -160,11 +136,9 @@ deploy = do
       -- Approve asset
       liftWeb3 $
         PreminedAsset.approve investorACallMln
-          fund giveQuantity
+          (fund^.fdAddress) giveQuantity
         >>= getTransactionEvents >>= \case
-          [PreminedAsset.Approval from to' allowance] ->
-            unless (from == investorA && to' == fund && allowance == giveQuantity) $
-              error "investor token allowance failed."
+          [PreminedAsset.Approval {}] -> pure ()
           _ -> error "investor token allowance failed."
 
       -- Request investment
@@ -192,7 +166,7 @@ deploy = do
     updatePriceFeed
 
     return
-      ( version, fund, canonicalPriceFeed, updatePriceFeed
+      ( version, fund^.fdAddress, canonicalPriceFeed, updatePriceFeed
       , manager, version^.vdAssets.to HashMap.keys)
 
   case r of

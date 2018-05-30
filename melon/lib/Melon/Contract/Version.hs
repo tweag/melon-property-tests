@@ -46,6 +46,8 @@ deploy owner = do
   defaultCall <- view ctxCall
   let ownerCall = defaultCall { callFrom = Just owner }
 
+  -- XXX: Replace calls to 'error' with dedicated exceptions.
+
   ------------------------------------------------------------
   -- Assets
   assets <- fmap HashMap.fromList $ forM assetsToDeploy $ \spec -> do
