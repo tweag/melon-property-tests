@@ -51,7 +51,14 @@ mockAddress :: Address
 mockAddress = "0x083c41ea13af6c2d5aaddf6e73142eb9a7b00183"
 
 
-deploy :: IO (Address, Address, [Address])
+deploy :: IO
+  ( Address -- ^ Melon fund
+  , Address -- ^ Price feed
+  , MelonT Web3 () -- ^ Update the price feed
+  , UIntN 256 -- ^ Number of registered exchanges
+  , Address -- ^ Fund manager
+  , [Address] -- ^ Registered assets
+  )
 deploy = do
   hSetBuffering stdout LineBuffering
   r <- runWeb3 $ runMelonT $ do
@@ -198,6 +205,7 @@ deploy = do
           , encodeSignature (Proxy @MatchingMarketAdapter.CancelOrderData)
           ] -- function signatures
     governanceAction governance owner canonicalPriceFeed registerMatchingMarket 0
+    let numExchanges = 2
 
     liftIO $ putStrLn "Register Ether token"
     let registerEtherToken = encodeCall $ CanonicalPriceFeed.RegisterAssetData
@@ -467,7 +475,7 @@ deploy = do
     updatePriceFeed
 
     liftIO $ putStrLn "done"
-    return (fund, canonicalPriceFeed, [mlnToken, ethToken, eurToken])
+    return (fund, canonicalPriceFeed, updatePriceFeed, numExchanges, manager, [mlnToken, ethToken, eurToken])
 
   case r of
     Left err -> error $ "deploy failed: " ++ show err
