@@ -24,14 +24,14 @@ import Melon.Deploy (deploy)
 
 
 tests :: IO Bool
-tests = checkParallel $$(discover)
+tests = checkParallel $$discover
 
 
 prop_melonport :: Property
 prop_melonport = property $ do
   (fund, priceFeed, assets) <- liftIO deploy
   actions <- forAll $
-    Gen.sequential (Range.linear 1 100) initialModelState $
+    Gen.sequential (Range.linear 1 100) initialModelState
       [ checkSharePrice fund priceFeed assets
       ]
   runMelonT $ executeSequential initialModelState actions
