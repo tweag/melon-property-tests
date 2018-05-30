@@ -39,7 +39,9 @@ library
                        Melon.Contract.PreminedAsset
                        Melon.Contract.PriceFeed
                        Melon.Contract.TermsAndConditions
+                       Melon.Contract.Version
                        Melon.Deploy
+                       Melon.Model
                        Melon.Test.Commands
                        Melon.Test.Model
                        Melon.ThirdParty.Network.Ethereum.ABI.Codec

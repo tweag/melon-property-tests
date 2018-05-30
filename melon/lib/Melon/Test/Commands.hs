@@ -5,11 +5,12 @@
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Melon.Test.Commands where
 
 import Control.Exception.Safe (MonadCatch, MonadThrow)
-import Control.Lens (view)
+import Control.Lens
 import Control.Monad
 import Control.Monad.IO.Class (MonadIO (..))
 import Data.Proxy (Proxy (..))
@@ -29,6 +30,7 @@ import Melon.ThirdParty.Network.Ethereum.ABI.Codec (encodeSignature)
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth (getTransactionEvents)
 import Melon.Context
 import Melon.Deploy (deploy)
+import Melon.Model
 
 
 tests :: IO Bool
@@ -43,13 +45,14 @@ prop_melonport = withTests 10 $ property $ do
   -- XXX: Use a mocked external price feed. Calling out the cryptocompare
   --   every time is too slow. Could be randomly generated, which might be good
   --   for test-coverage.
-  (fund, priceFeed, updatePriceFeed, numExchanges, manager, assets) <- liftIO deploy
-  let [mlnToken, ethToken, _eurToken] = assets
+  (version, fund, priceFeed, updatePriceFeed, manager, assets) <- liftIO deploy
+  let mlnToken = version^.vdMlnToken
+      ethToken = version^.vdEthToken
   actions <- forAll $
     Gen.sequential (Range.linear 1 100) initialModelState
       [ checkSharePrice fund priceFeed assets
       , checkFeeAllocation fund
-      , checkMakeOrderSharePrice fund manager updatePriceFeed numExchanges mlnToken ethToken
+      , checkMakeOrderSharePrice fund manager updatePriceFeed mlnToken ethToken
       ]
   runMelonT $ executeSequential initialModelState actions
 
@@ -184,16 +187,16 @@ checkMakeOrderSharePrice
   => Address -- ^ Melon fund
   -> Address -- ^ Fund manager
   -> MelonT Web3 () -- ^ Update the price feed
-  -> UIntN 256 -- ^ Number of registered exchanges
   -> Address -- ^ Give asset
   -> Address -- ^ Get asset
   -> Command n (MelonT m) ModelState
-checkMakeOrderSharePrice fund manager updatePriceFeed numExchanges giveAsset getAsset =
+checkMakeOrderSharePrice fund manager updatePriceFeed giveAsset getAsset =
   let
     gen _ = Just $ CheckMakeOrderSharePrice
       -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
       --   Indeed this causes the call to SimpleAdapter (index 0) to fail.
-      <$> Gen.integral (Range.linear 1 numExchanges)
+      -- XXX: Number of exchanges is hard-coded
+      <$> Gen.integral (Range.linear 1 2)
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
     execute (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity) = do

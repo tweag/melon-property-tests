@@ -2,8 +2,10 @@ module Main
   ( main
   ) where
 
-import Melon.Deploy
+import Control.Monad (void)
+
+import Melon.Test.Commands
 
 
 main :: IO ()
-main = deploy
+main = void tests
