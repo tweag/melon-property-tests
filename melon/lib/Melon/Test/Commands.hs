@@ -47,13 +47,17 @@ tests = do
 
 prop_melonport :: Manager -> Provider -> Property
 prop_melonport httpManager web3Provider = withTests 10 $ property $ do
+  let hundredPercent = 10^(18::Int) :: UIntN 256
+  managementFee <- forAll $ Gen.integral (Range.linear 0 (hundredPercent - 1))
+  performanceFee <- forAll $ Gen.integral (Range.linear 0 (hundredPercent - 1))
+
   -- XXX: This repeats the full deployment for each test run.
   --   It might be better (certainly for performance) to only setup a new fund
   --   for each test-case, and share the same 'Version' instance between tests.
   (version, fund, investors) <- runMelonT httpManager web3Provider $ do
     owner:manager:investors <- liftWeb3 accounts
     version <- Version.deploy owner
-    fund <- Fund.deploy version manager
+    fund <- Fund.deploy version manager managementFee performanceFee
     pure (version, fund, investors)
 
   -- Enable investment and redemption

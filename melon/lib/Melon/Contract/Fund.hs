@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -8,6 +9,7 @@ module Melon.Contract.Fund
 import Control.Lens
 import Control.Monad (unless)
 import Network.Ethereum.ABI.Prim.Address (Address)
+import Network.Ethereum.ABI.Prim.Int (UIntN)
 import Network.Ethereum.Web3.Types (Call (..))
 
 import qualified Melon.ABI.Version.Version as Version
@@ -23,8 +25,12 @@ deploy
     -- ^ The version contract and modules.
   -> Address
     -- ^ The fund manager.
+  -> UIntN 256
+    -- ^ The management fee (0 = 0%, 10^18 = 100%)
+  -> UIntN 256
+    -- ^ The performance fee (0 = 0%, 10^18 = 100%)
   -> m FundDeployment
-deploy version manager = do
+deploy version manager managementFee performanceFee = do
   defaultCall <- getCall
   let managerCall = defaultCall { callFrom = Just manager }
       callVersion = defaultCall { callTo = Just $ version^.vdAddress }
@@ -38,8 +44,8 @@ deploy version manager = do
   fund <- liftWeb3 $ Version.setupFund managerCallVersion
     "Test fund" -- fund name
     (version^.vdMlnToken) -- quote asset
-    (10^(16::Int)) -- management fee
-    10 -- performance fee
+    managementFee -- management fee
+    performanceFee -- performance fee
     (version^.vdCompliance) -- participation module address
     (version^.vdRiskManagement) -- risk management module address
     -- addresses of exchanges where the fund can trade
