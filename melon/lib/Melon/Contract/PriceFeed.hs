@@ -99,10 +99,18 @@ deployCanonicalPriceFeed owner mlnToken governance = do
     mockAddress -- quote asset break-out address
     [] -- quote asset EIP standards
     [] -- quote asset white listed functions
-    [0, 60] -- update-info: interval, validity
+    -- update-info: interval, validity
+    -- Real-time requirements such as "update every 60 s" are difficult to
+    -- combine with the property based state-machine testing used in this
+    -- project.  Currently, these requirements are ignored by configuring a
+    -- very long update time and validity time. However, the tests do perform
+    -- price-feed updates. So, that aspect is not untested.
+    [oneYearInSeconds `div` 2, oneYearInSeconds]
     [1000000, 4] -- staking-info: minStake, numOperators
     governance -- address of Governance
   liftWeb3 $ getContractAddress tx
+  where
+    oneYearInSeconds = 60 * 60 * 24 * 365
 
 deployStakingPriceFeed
   :: MonadMelon m
