@@ -9,8 +9,12 @@ module Melon.Contract.PriceFeed
   , deployStakingPriceFeed
   , updateCanonicalPriceFeed
   , makeConstantConvertedPrices
+  , PriceSource
+  , PriceSourceSpec (..)
+  , instantiatePriceSource
   ) where
 
+import Control.Concurrent.MVar (modifyMVar, newMVar)
 import Control.Exception.Safe (Exception (..), throw)
 import Control.Lens
 import Control.Monad.IO.Class (liftIO)
@@ -155,7 +159,8 @@ updateCanonicalPriceFeed source canonical staking owner assets = do
     prices -- list of asset prices
     >>= getTransactionEvents >>= \case
       [StakingPriceFeed.PriceUpdated _] -> pure ()
-      _ -> throw ExpectedOnePriceUpdateEvent
+      _ -> throw $ ExpectedOnePriceUpdateEvent
+        "At StakingPriceFeed.update"
 
   let ownerCallCanonical = defaultCall
         { callFrom = Just owner
@@ -165,7 +170,8 @@ updateCanonicalPriceFeed source canonical staking owner assets = do
     assets -- list of asset addresses
     >>= getTransactionEvents >>= \case
       [CanonicalPriceFeed.PriceUpdated _] -> pure ()
-      _ -> throw ExpectedOnePriceUpdateEvent
+      _ -> throw $ ExpectedOnePriceUpdateEvent
+        "At CanonicalPriceFeed.collectAndUpdate"
   pure ()
 
 
@@ -212,6 +218,26 @@ makeConstantConvertedPrices quoteName quoteDecimals tokens = do
   pure $ pure prices
 
 
+data PriceSourceSpec
+    -- | Fetches prices from CryptoCompare once, then repeats those prices.
+  = RealisticConstantPriceSource
+      T.Text -- ^ Quote asset name on CryptoCompare
+      Integer -- ^ Quote asset decimals
+      [(T.Text, Integer)] -- ^ List of tokens (name on CC, decimals)
+    -- | Every repeating cycle of unrealistic prices
+  | UnrealisticCyclicPriceSource [[UIntN 256]]
+  deriving (Eq, Ord, Show)
+
+
+instantiatePriceSource :: PriceSourceSpec -> IO PriceSource
+instantiatePriceSource = \case
+  RealisticConstantPriceSource quoteName quoteDecimals tokens ->
+    makeConstantConvertedPrices quoteName quoteDecimals tokens
+  UnrealisticCyclicPriceSource priceCycle -> do
+    mv <- newMVar (cycle priceCycle)
+    pure $ modifyMVar mv $ \(p:ps) -> pure (ps, p)
+
+
 -- | Dummy price-feed update that just returns constants.
 --
 -- The values returned were taken from a run of @utils/lib/updatePriceFeed.js@.
@@ -244,7 +270,7 @@ data PriceFeedError
   = CryptoCompareInvalidResult String
   | CryptoCompareMissingCurrency
   | ConstantMissingCurrency
-  | ExpectedOnePriceUpdateEvent
+  | ExpectedOnePriceUpdateEvent String
   | FailedToApproveStakingPriceFeed
   | FailedToDepositStake
   deriving (Show, Typeable)
@@ -256,8 +282,9 @@ instance Exception PriceFeedError where
       "Price lookup on cryptocompare was missing a currency."
     ConstantMissingCurrency ->
       "Price lookup in constant price-map was missing a currency."
-    ExpectedOnePriceUpdateEvent ->
-      "Expected exactly one `PriceUpdate` event."
+    ExpectedOnePriceUpdateEvent msg ->
+      "Expected exactly one `PriceUpdate` event: "
+      ++ msg
     FailedToApproveStakingPriceFeed ->
       "Failed to approve staking price feed."
     FailedToDepositStake ->

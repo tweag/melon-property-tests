@@ -49,10 +49,6 @@ prop_melonport httpManager web3Provider = withTests 10 $ property $ do
   -- XXX: This repeats the full deployment for each test run.
   --   It might be better (certainly for performance) to only setup a new fund
   --   for each test-case, and share the same 'Version' instance between tests.
-  -- XXX: Use a mocked external price feed. Calling out the cryptocompare
-  --   every time is too slow. Could be randomly generated, which might be good
-  --   for test-coverage.
-
   (version, fund) <- runMelonT httpManager web3Provider $ do
     owner:manager:_ <- liftWeb3 accounts
     version <- Version.deploy owner
@@ -60,11 +56,31 @@ prop_melonport httpManager web3Provider = withTests 10 $ property $ do
     pure (version, fund)
 
   updatePriceFeed <- do
-    priceSource <- liftIO $
-      PriceFeed.makeConstantConvertedPrices "MLN" 18
-        [ (asset^.asCryptoCompareName, asset^.asDecimals)
-        | asset <- version^.vdAssets.to HashMap.elems
+    priceSourceSpec <- forAll $ do
+      let numAssets = HashMap.size (version^.vdAssets)
+          unrealisticCyclicPriceSource =
+            fmap PriceFeed.UnrealisticCyclicPriceSource $
+              Gen.list (Range.linear 1 100) $ -- a cycle of up to 100 prices
+                Gen.list (Range.singleton numAssets) $ -- one price per asset
+                  -- XXX:
+                  --   The CanonicalPriceFeed.collectAndUpdate operation does
+                  --   not complete on an all zero price update, or an update
+                  --   of the form @[0, 1, 1]@.
+                  --   However, the StakingPriceFeed.update operation accepts
+                  --   an all zero price update.
+                  -- Gen.integral (Range.linear 0 maxBound)
+                  Gen.integral (Range.linear 1 maxBound)
+          realisticConstantPriceSource = pure $
+            PriceFeed.RealisticConstantPriceSource "MLN" 18
+              [ (asset^.asCryptoCompareName, asset^.asDecimals)
+              | asset <- version^.vdAssets.to HashMap.elems
+              ]
+      Gen.frequency
+        [ (1, unrealisticCyclicPriceSource)
+        , (2, realisticConstantPriceSource)
         ]
+    priceSource <- liftIO $ PriceFeed.instantiatePriceSource priceSourceSpec
+
     pure $ PriceFeed.updateCanonicalPriceFeed
       priceSource
       (version^.vdCanonicalPriceFeed)
