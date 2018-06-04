@@ -35,6 +35,7 @@ import qualified Melon.Contract.Fund as Fund
 import qualified Melon.Contract.PriceFeed as PriceFeed
 import qualified Melon.Contract.Version as Version
 import Melon.Model.Input
+import Melon.Model.State
 
 
 tests :: IO Bool
@@ -128,13 +129,6 @@ prop_melonport httpManager web3Provider = withTests 10 $ property $ do
       ]
   runMelonT httpManager web3Provider $
     executeSequential initialModelState actions
-
-
-data ModelState (v :: * -> *) = ModelState
-  deriving (Eq, Ord, Show)
-
-initialModelState :: ModelState v
-initialModelState = ModelState
 
 
 -- | Tests share-price invariant
