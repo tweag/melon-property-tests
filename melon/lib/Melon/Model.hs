@@ -25,6 +25,8 @@ data ModelInput m = ModelInput
     -- ^ The fund deployment.
   , _miUpdatePriceFeed :: MelonT m ()
     -- ^ The action to update the price feed.
+  , _miInvestors :: [Address]
+    -- ^ Available fund investors.
   } deriving Generic
 
 

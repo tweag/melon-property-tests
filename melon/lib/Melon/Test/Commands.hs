@@ -18,6 +18,7 @@ import Data.Proxy (Proxy (..))
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
+import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
 import Network.Ethereum.Web3.Eth (accounts)
 import Network.Ethereum.Web3.Types (Call (..))
@@ -49,11 +50,23 @@ prop_melonport httpManager web3Provider = withTests 10 $ property $ do
   -- XXX: This repeats the full deployment for each test run.
   --   It might be better (certainly for performance) to only setup a new fund
   --   for each test-case, and share the same 'Version' instance between tests.
-  (version, fund) <- runMelonT httpManager web3Provider $ do
-    owner:manager:_ <- liftWeb3 accounts
+  (version, fund, investors) <- runMelonT httpManager web3Provider $ do
+    owner:manager:investors <- liftWeb3 accounts
     version <- Version.deploy owner
     fund <- Fund.deploy version manager
-    pure (version, fund)
+    pure (version, fund, investors)
+
+  -- Enable investment and redemption
+  -- XXX: Move this into tests and make it part of the model.
+  runMelonT httpManager web3Provider $ do
+    defaultCall <- getCall
+    let managerCallFund = defaultCall
+          { callFrom = Just $ fund^.fdManager
+          , callTo = Just $ fund^.fdAddress
+          }
+        assets = version^.vdAssets.to HashMap.keys
+    void $ liftWeb3 $ Fund.enableInvestment managerCallFund assets
+    void $ liftWeb3 $ Fund.enableRedemption managerCallFund assets
 
   updatePriceFeed <- do
     priceSourceSpec <- forAll $ do
@@ -92,13 +105,22 @@ prop_melonport httpManager web3Provider = withTests 10 $ property $ do
         { _miVersion = version
         , _miFund = fund
         , _miUpdatePriceFeed = updatePriceFeed
+        , _miInvestors = investors
         }
+
+  -- Available assets
+  -- XXX: Make this prettier.
+  footnote $ "Assets:\n" ++ unlines
+    [ "  " ++ show address ++ ": " ++ show (asset^.asName)
+    | (address, asset) <- input^.miVersion.vdAssets.to HashMap.toList
+    ]
 
   actions <- forAll $
     Gen.sequential (Range.linear 1 100) initialModelState
       [ checkSharePrice input
       , checkFeeAllocation input
       , checkMakeOrderSharePrice input
+      , checkRequestInvestment input
       ]
   runMelonT httpManager web3Provider $
     executeSequential initialModelState actions
@@ -203,7 +225,7 @@ checkFeeAllocation input =
     execute CheckFeeAllocation = do
       defaultCall <- view ctxCall
 
-      evalM $ updatePriceFeed
+      evalM updatePriceFeed
 
       let callFund = defaultCall { callTo = Just fund }
       priceBeforeAlloc <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
@@ -325,3 +347,105 @@ instance HTraversable CheckMakeOrderSharePrice where
     <$> pure exchangeIndex
     <*> pure sellQuantity
     <*> pure getQuantity
+
+
+-- | Test request-investment property
+--
+-- - Investment and redemption by regular means (request and execute, not
+--     @emergencyRedeem@) do not immediately alter share price
+checkRequestInvestment
+  :: ( Monad n, MonadGen n, Monad m
+     , MonadCatch m, MonadIO m, MonadTest m, MonadThrow m
+     )
+  => ModelInput m
+  -> Command n (MelonT m) ModelState
+checkRequestInvestment input =
+  let
+    updatePriceFeed = input^.miUpdatePriceFeed
+    fund = input^.miFund.fdAddress
+    owner = input^.miVersion.vdOwner
+
+    gen _ = Just $ CheckRequestInvestment
+      <$> Gen.element (input^.miInvestors)
+      <*> Gen.element (input^.miVersion.vdAssets.to HashMap.keys)
+      <*> Gen.integral (Range.linear 1 100000)
+      <*> Gen.integral (Range.linear 1 100000)
+    execute (CheckRequestInvestment investor token give share) = do
+      defaultCall <- getCall
+      let callFund = defaultCall { callTo = Just fund }
+          ownerCallToken = defaultCall
+            { callFrom = Just owner
+            , callTo = Just token
+            }
+          investorCallToken = defaultCall
+            { callFrom = Just investor
+            , callTo = Just token
+            }
+          investorCallFund = defaultCall
+            { callFrom = Just investor
+            , callTo = Just fund
+            }
+
+      -- Price-feed must be up-to-date
+      evalM updatePriceFeed
+
+      -- Share-price before
+      priceBefore <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
+
+      -- Transfer the amount
+      -- XXX: Take previous transfers into account
+      evalM $ liftWeb3 $
+        Asset.transfer ownerCallToken investor give
+        >>= getTransactionEvents >>= \case
+          [Asset.Transfer {}] -> pure ()
+          _ -> fail "Token transfer failed."
+
+      -- Approve the amount
+      -- XXX: Take previous approval into account
+      evalM $ liftWeb3 $
+        Asset.approve investorCallToken fund give
+        >>= getTransactionEvents >>= \case
+          [Asset.Approval {}] -> pure ()
+          _ -> fail "Investor token approval failed."
+
+      -- Request investment
+      -- XXX: Keep track of open investment requests
+      _reqId <- evalM $ liftWeb3 $
+        Fund.requestInvestment investorCallFund give share token
+        >>= getTransactionEvents >>= \case
+          [Fund.RequestUpdated reqId] -> pure reqId
+          _ -> fail "Investment request failed."
+
+      -- Share-price after investment
+      priceAfter <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
+
+      decimals <- evalM $ liftWeb3 $ Fund.getDecimals callFund
+
+      pure (priceBefore, priceAfter, decimals)
+  in
+  Command gen execute
+    [ Ensure $ \_prior _after CheckRequestInvestment {}
+      (priceBefore, priceAfter, decimals) -> do
+        let precision = 8 :: UIntN 256
+            dropDecimals = decimals - precision
+            truncate' = (`div` (10^dropDecimals))
+        footnote $ "decimals " ++ show decimals
+        footnote $ "dropDecimals " ++ show dropDecimals
+        -- Property only holds to a certain precision.
+        truncate' priceBefore === truncate' priceAfter
+    ]
+
+data CheckRequestInvestment (v :: * -> *)
+  = CheckRequestInvestment
+      Address -- ^ Investor
+      Address -- ^ Trade token
+      (UIntN 256) -- ^ Give quantity
+      (UIntN 256) -- ^ Share quantity
+  deriving (Eq, Show)
+instance HTraversable CheckRequestInvestment where
+  htraverse _ (CheckRequestInvestment investor token give share)
+    = CheckRequestInvestment
+    <$> pure investor
+    <*> pure token
+    <*> pure give
+    <*> pure share
