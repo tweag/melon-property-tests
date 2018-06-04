@@ -41,7 +41,7 @@ library
                        Melon.Contract.PriceFeed
                        Melon.Contract.TermsAndConditions
                        Melon.Contract.Version
-                       Melon.Model
+                       Melon.Model.Input
                        Melon.Test.Commands
                        Melon.Test.Model
                        Melon.ThirdParty.Network.Ethereum.ABI.Codec

@@ -30,7 +30,7 @@ import Melon.Context
 import qualified Melon.Contract.Governance as Governance
 import qualified Melon.Contract.PreminedAsset as PreminedAsset
 import qualified Melon.Contract.PriceFeed as PriceFeed
-import Melon.Model
+import Melon.Model.Input
 import Melon.ThirdParty.Network.Ethereum.ABI.Codec
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 

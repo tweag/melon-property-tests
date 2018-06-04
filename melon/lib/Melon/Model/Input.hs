@@ -5,7 +5,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Melon.Model where
+module Melon.Model.Input where
 
 import Control.Lens.TH (makeClassy)
 import Data.HashMap.Strict (HashMap)

@@ -34,7 +34,7 @@ import Melon.Context
 import qualified Melon.Contract.Fund as Fund
 import qualified Melon.Contract.PriceFeed as PriceFeed
 import qualified Melon.Contract.Version as Version
-import Melon.Model
+import Melon.Model.Input
 
 
 tests :: IO Bool

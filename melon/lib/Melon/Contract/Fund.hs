@@ -15,7 +15,7 @@ import Network.Ethereum.Web3.Types (Call (..))
 import qualified Melon.ABI.Version.Version as Version
 import Melon.Context
 import Melon.Contract.TermsAndConditions
-import Melon.Model
+import Melon.Model.Input
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 
 
