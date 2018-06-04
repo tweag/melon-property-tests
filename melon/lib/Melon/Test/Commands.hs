@@ -14,6 +14,8 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Trans.Class
+import Data.ByteArray (convert)
+import qualified Data.ByteString.Char8 as C8
 import qualified Data.HashMap.Strict as HashMap
 import Data.Proxy (Proxy (..))
 import Hedgehog
@@ -29,7 +31,8 @@ import qualified Melon.ABI.Assets.Asset as Asset
 import qualified Melon.ABI.Exchange.Adapter.MatchingMarketAdapter as MatchingMarketAdapter
 import qualified Melon.ABI.Fund as Fund
 import qualified Melon.ABI.PriceFeeds.CanonicalPriceFeed as CanonicalPriceFeed
-import Melon.ThirdParty.Network.Ethereum.ABI.Codec (encodeSignature)
+import qualified Melon.ABI.Version.Version as Version
+import Melon.ThirdParty.Network.Ethereum.ABI.Codec (encodeCall, encodeSignature)
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth (getTransactionEvents)
 import Melon.Context
 import qualified Melon.Contract.Fund as Fund
@@ -45,7 +48,7 @@ tests = do
   manager <- newManager defaultManagerSettings
   provider <- getProvider
   checkParallel $ Group "Melon.Test.Commands"
-    [ ("prop_melonport", prop_melonport manager provider) ]
+    [ ("prop_melonport", prop_melonport 20 100 manager provider) ]
 
 
 -- | Defines the Melon fund state-machine test.
@@ -61,9 +64,9 @@ tests = do
 -- @managementFee@, then shrinking will check if the invariant still fails for
 -- smaller and smaller values of @managementFee@ until it hits the minimum
 -- value, zero in this case.
-prop_melonport :: Manager -> Provider -> Property
-prop_melonport httpManager web3Provider =
-  withTests 10 $ property $
+prop_melonport :: TestLimit -> Int -> Manager -> Provider -> Property
+prop_melonport numTests numCommands httpManager web3Provider =
+  withTests numTests $ property $
   runMelonT httpManager web3Provider $ do
 
   ----------------------------------------------------------
@@ -115,10 +118,21 @@ prop_melonport httpManager web3Provider =
   ----------------------------------------------------------
   -- Footnotes
 
-  -- Available assets
-  -- XXX: Make this prettier.
+  -- Accounts
+  footnote $ "Owner: " ++ show owner
+  footnote $ "Manager: " ++ show manager
+  footnote $ "Investors:\n" ++ unlines
+    [ "  " ++ show investor | investor <- investors ]
+
+  -- Contracts
+  footnote $ "Version: " ++ show (version^.vdAddress)
+  footnote $ "Fund: " ++ show (fund^.fdAddress)
+
+  -- Assets
   footnote $ "Assets:\n" ++ unlines
-    [ "  " ++ show address ++ ": " ++ show (asset^.asName)
+    [ "  "
+      ++ (C8.unpack . convert $ asset^.asName)
+      ++ ": " ++ show address
     | (address, asset) <- input^.miVersion.vdAssets.to HashMap.toList
     ]
 
@@ -126,8 +140,10 @@ prop_melonport httpManager web3Provider =
   -- Execute commands
 
   actions <- lift $ forAll $
-    Gen.sequential (Range.linear 1 100) initialModelState
-      [ checkSharePrice input
+    Gen.sequential (Range.linear 1 numCommands) initialModelState
+      [ checkIsFundShutdown input
+      , managerCanShutdownFund input
+      , checkSharePrice input
       , checkFeeAllocation input
       , checkMakeOrderSharePrice input
       , checkRequestInvestment input
@@ -167,7 +183,114 @@ genPriceSource version = do
 
 ----------------------------------------------------------------------
 -- Commands and Invariants
+----------------------------------------------------------------------
 
+------------------------------------------------------------
+-- Fund shutdown
+
+-- | Check if the fund is shut-down.
+data CmdIsFundShutdown (v :: * -> *)
+  = CmdIsFundShutdown
+  deriving (Eq, Show)
+instance HTraversable CmdIsFundShutdown where
+  htraverse _ _ = pure CmdIsFundShutdown
+
+-- | Check that the model and fund agree on shut-down status.
+checkIsFundShutdown
+  :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
+  => ModelInput m
+  -> Command n (MelonT m) ModelState
+checkIsFundShutdown input =
+  let
+    fund = input^.miFund.fdAddress
+
+    gen _ = Just $ pure CmdIsFundShutdown
+    execute CmdIsFundShutdown = do
+      defaultCall <- getCall
+      let callFund = defaultCall { callTo = Just fund }
+      evalM $ liftWeb3 $ Fund.isShutDown callFund
+  in
+  Command gen execute
+    [ Ensure $ \s _ _ o -> s^.msIsShutdown === o ]
+
+-- | @CmdShutdownFund account@
+--
+-- The given @account@ will attempt to shut-down the fund.
+data CmdShutdownFund (v :: * -> *)
+  = CmdShutdownFund Address
+  deriving (Eq, Show)
+instance HTraversable CmdShutdownFund where
+  htraverse _ (CmdShutdownFund account) =
+    pure $ CmdShutdownFund account
+
+-- | Manager can shut-down the fund contract
+managerCanShutdownFund
+  :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
+  => ModelInput m
+  -> Command n (MelonT m) ModelState
+managerCanShutdownFund input =
+  let
+    version = input^.miVersion.vdAddress
+    fund = input^.miFund.fdAddress
+
+    gen s
+      | s^.msIsShutdown = Nothing -- Already shut-down
+      | otherwise       = Just $ pure $
+          CmdShutdownFund (input^.miFund.fdManager)
+    execute (CmdShutdownFund manager) = do
+      defaultCall <- getCall
+      let managerCallVersion = defaultCall
+            { callFrom = Just manager
+            , callTo = Just version
+            }
+          callFund = defaultCall { callTo = Just fund }
+      annotateShow $ encodeCall $ Fund.ShutDownData
+      void $ evalM $ liftWeb3 $ Version.shutDownFund managerCallVersion fund
+      evalM $ liftWeb3 $ Fund.isShutDown callFund
+  in
+  Command gen execute
+    [ Require $ \s _ -> not $ s^.msIsShutdown
+    , Update $ \s _ _ -> s & msIsShutdown .~ True
+    , Ensure $ \_ _ _ o -> o === True
+    ]
+
+-- | No one but the manager can shut-down the fund contract
+--
+-- XXX: This test-case is disabled because it causes timeouts
+--   with hs-web3 and parity.
+-- onlyManagerCanShutdownFund
+--   :: (Monad n, MonadGen n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
+--   => ModelInput m
+--   -> Command n (MelonT m) ModelState
+-- onlyManagerCanShutdownFund input =
+--   let
+--     owner = input^.miVersion.vdOwner
+--     version = input^.miVersion.vdAddress
+--     fund = input^.miFund.fdAddress
+--
+--     gen s
+--       | s^.msIsShutdown = Nothing -- Already shut-down
+--       | otherwise       = Just $ fmap CmdShutdownFund $ Gen.element $
+--           owner:version:fund:(input^.miInvestors)
+--     execute (CmdShutdownFund account) = do
+--       defaultCall <- getCall
+--       let accountCallVersion = defaultCall
+--             { callFrom = Just account
+--             , callTo = Just version
+--             }
+--           callFund = defaultCall { callTo = Just fund }
+--       annotateShow $ encodeCall $ Fund.ShutDownData
+--       void $ evalM $ liftWeb3 $ Version.shutDownFund accountCallVersion fund
+--       evalM $ liftWeb3 $ Fund.isShutDown callFund
+--   in
+--   Command gen execute
+--     [ Require $ \s _ -> not $ s^.msIsShutdown
+--     , Ensure $ \_ _ _ o -> o === False
+--     ]
+
+
+------------------------------------------------------------
+-- Share Price
 
 -- | Tests share-price invariant
 --
@@ -188,7 +311,9 @@ checkSharePrice input =
     priceFeed = input^.miVersion.vdCanonicalPriceFeed
     assets = input^.miVersion.vdAssets.to HashMap.keys
 
-    gen _ = Just $ pure CheckSharePrice
+    gen s
+      | s^.msIsShutdown = Nothing
+      | otherwise = Just $ pure CheckSharePrice
     execute CheckSharePrice = do
       defaultCall <- view ctxCall
 
@@ -210,7 +335,8 @@ checkSharePrice input =
       pure (prices, balances, totalShares, sharePrice, decimals)
   in
   Command gen execute
-    [ Ensure $ \_prior _after CheckSharePrice
+    [ Require $ \s _ -> not $ s^.msIsShutdown
+    , Ensure $ \_prior _after CheckSharePrice
       (prices, balances, totalShares, sharePrice, decimals) -> do
         let precision = 8 :: UIntN 256
             dropDecimals = decimals - precision
@@ -257,7 +383,9 @@ checkFeeAllocation input =
     updatePriceFeed = input^.miUpdatePriceFeed
     fund = input^.miFund.fdAddress
 
-    gen _ = Just $ pure CheckFeeAllocation
+    gen s
+      | s^.msIsShutdown = Nothing
+      | otherwise = Just $ pure CheckFeeAllocation
     execute CheckFeeAllocation = do
       defaultCall <- view ctxCall
 
@@ -276,7 +404,8 @@ checkFeeAllocation input =
       pure (priceBeforeAlloc, priceAfterAlloc, decimals)
   in
   Command gen execute
-    [ Ensure $ \_prior _after CheckFeeAllocation
+    [ Require $ \s _ -> not $ s^.msIsShutdown
+    , Ensure $ \_prior _after CheckFeeAllocation
       (priceBeforeAlloc, priceAfterAlloc, decimals) -> do
         let precision = 8 :: UIntN 256
             dropDecimals = decimals - precision
@@ -314,7 +443,9 @@ checkMakeOrderSharePrice input =
     giveAsset = input^.miVersion.vdMlnToken
     getAsset = input^.miVersion.vdEthToken
 
-    gen _ = Just $ CheckMakeOrderSharePrice
+    gen s
+      | s^.msIsShutdown = Nothing
+      | otherwise = Just $ CheckMakeOrderSharePrice
       -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
       --   Indeed this causes the call to SimpleAdapter (index 0) to fail.
       -- XXX: Number of exchanges is hard-coded
@@ -360,7 +491,8 @@ checkMakeOrderSharePrice input =
       pure (priceBeforeOrder, priceAfterOrder, decimals)
   in
   Command gen execute
-    [ Ensure $ \_prior _after CheckMakeOrderSharePrice {}
+    [ Require $ \s _ -> not $ s^.msIsShutdown
+    , Ensure $ \_prior _after CheckMakeOrderSharePrice {}
       (priceBeforeOrder, priceAfterOrder, decimals) -> do
         let precision = 8 :: UIntN 256
             dropDecimals = decimals - precision
@@ -401,11 +533,13 @@ checkRequestInvestment input =
     fund = input^.miFund.fdAddress
     owner = input^.miVersion.vdOwner
 
-    gen _ = Just $ CheckRequestInvestment
-      <$> Gen.element (input^.miInvestors)
-      <*> Gen.element (input^.miVersion.vdAssets.to HashMap.keys)
-      <*> Gen.integral (Range.linear 1 100000)
-      <*> Gen.integral (Range.linear 1 100000)
+    gen s
+      | s^.msIsShutdown = Nothing
+      | otherwise = Just $ CheckRequestInvestment
+          <$> Gen.element (input^.miInvestors)
+          <*> Gen.element (input^.miVersion.vdAssets.to HashMap.keys)
+          <*> Gen.integral (Range.linear 1 100000)
+          <*> Gen.integral (Range.linear 1 100000)
     execute (CheckRequestInvestment investor token give share) = do
       defaultCall <- getCall
       let callFund = defaultCall { callTo = Just fund }
@@ -458,7 +592,8 @@ checkRequestInvestment input =
       pure (priceBefore, priceAfter)
   in
   Command gen execute
-    [ Ensure $ \_prior _after CheckRequestInvestment {}
+    [ Require $ \s _ -> not $ s^.msIsShutdown
+    , Ensure $ \_prior _after CheckRequestInvestment {}
       (priceBefore, priceAfter) -> do
         -- Property holds exactly.
         priceBefore === priceAfter
