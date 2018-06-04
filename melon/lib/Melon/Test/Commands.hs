@@ -134,7 +134,8 @@ instance HTraversable CheckSharePrice where
 -- Interpreted as:
 -- @
 --   sharePrice <- Fund.calcSharePrice
---   sharePrice' <- Fund.calcSharePriceAndAllocateFees
+--   _ <- Fund.calcSharePriceAndAllocateFees
+--   sharePrice' <- Fund.calcSharePrice
 --   sharePrice === sharePrice'
 -- @
 checkFeeAllocation
@@ -149,11 +150,12 @@ checkFeeAllocation fund =
 
       let callFund = defaultCall { callTo = Just fund }
       priceBeforeAlloc <- liftWeb3 $ Fund.calcSharePrice callFund
-      priceAfterAlloc <- liftWeb3 $
+      _ <- liftWeb3 $
         Fund.calcSharePriceAndAllocateFees callFund
         >>= getTransactionEvents >>= \case
           [Fund.CalculationUpdate _ _ _ _ sharePrice _] -> pure sharePrice
           _ -> fail "calcSharePriceAndAllocateFees failed"
+      priceAfterAlloc <- liftWeb3 $ Fund.calcSharePrice callFund
       decimals <- liftWeb3 $ Fund.getDecimals callFund
 
       pure (priceBeforeAlloc, priceAfterAlloc, decimals)
@@ -167,6 +169,8 @@ checkFeeAllocation fund =
         footnote $ "decimals " ++ show decimals
         footnote $ "dropDecimals " ++ show dropDecimals
         -- Property only holds to a certain precision.
+        -- It does not seem to be influenced by time, this was checked by
+        -- introducing an up to one second delay after `priceBeforeAlloc`.
         truncate' priceBeforeAlloc === truncate' priceAfterAlloc
     ]
 
