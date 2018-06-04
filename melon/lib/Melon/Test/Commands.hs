@@ -419,20 +419,13 @@ checkRequestInvestment input =
       -- Share-price after investment
       priceAfter <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
-      decimals <- evalM $ liftWeb3 $ Fund.getDecimals callFund
-
-      pure (priceBefore, priceAfter, decimals)
+      pure (priceBefore, priceAfter)
   in
   Command gen execute
     [ Ensure $ \_prior _after CheckRequestInvestment {}
-      (priceBefore, priceAfter, decimals) -> do
-        let precision = 8 :: UIntN 256
-            dropDecimals = decimals - precision
-            truncate' = (`div` (10^dropDecimals))
-        footnote $ "decimals " ++ show decimals
-        footnote $ "dropDecimals " ++ show dropDecimals
-        -- Property only holds to a certain precision.
-        truncate' priceBefore === truncate' priceAfter
+      (priceBefore, priceAfter) -> do
+        -- Property holds exactly.
+        priceBefore === priceAfter
     ]
 
 data CheckRequestInvestment (v :: * -> *)
