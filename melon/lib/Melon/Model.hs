@@ -11,6 +11,19 @@ import GHC.Generics (Generic)
 import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Bytes (BytesN)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
+import Network.Ethereum.Web3.Provider (Web3)
+
+import Melon.Context (MelonT)
+
+
+data ModelInput = ModelInput
+  { _miVersion :: VersionDeployment
+    -- ^ The version deployment.
+  , _miFund :: FundDeployment
+    -- ^ The fund deployment.
+  , _miUpdatePriceFeed :: MelonT Web3 ()
+    -- ^ The action to update the price feed.
+  } deriving Generic
 
 
 data FundDeployment = FundDeployment
@@ -18,8 +31,6 @@ data FundDeployment = FundDeployment
     _fdAddress :: Address
   , -- | Fund manager.
     _fdManager :: Address
-  , -- | Corresponding version deployment.
-    _fdVersion :: VersionDeployment
   , -- | Terms and conditions signature.
     _fdTermsAndConditions :: (BytesN 32, BytesN 32, UIntN 8)
   } deriving (Generic, Show)
@@ -77,3 +88,4 @@ makeClassy ''AssetSpec
 makeClassy ''MarketDeployment
 makeClassy ''VersionDeployment
 makeClassy ''FundDeployment
+makeClassy ''ModelInput

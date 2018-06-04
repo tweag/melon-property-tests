@@ -57,6 +57,5 @@ deploy version manager = do
   pure $! FundDeployment
     { _fdAddress = fund
     , _fdManager = manager
-    , _fdVersion = version
     , _fdTermsAndConditions = (r, s, v)
     }

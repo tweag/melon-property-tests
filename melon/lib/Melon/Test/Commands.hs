@@ -13,14 +13,16 @@ import Control.Exception.Safe (MonadCatch, MonadThrow)
 import Control.Lens
 import Control.Monad
 import Control.Monad.IO.Class (MonadIO (..))
+import qualified Data.HashMap.Strict as HashMap
 import Data.Proxy (Proxy (..))
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
-import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
+import Network.Ethereum.Web3.Eth (accounts)
 import Network.Ethereum.Web3.Provider (Web3)
 import Network.Ethereum.Web3.Types (Call (..))
+import Network.HTTP.Client (defaultManagerSettings, newManager)
 
 import qualified Melon.ABI.Assets.Asset as Asset
 import qualified Melon.ABI.Exchange.Adapter.MatchingMarketAdapter as MatchingMarketAdapter
@@ -29,32 +31,62 @@ import qualified Melon.ABI.PriceFeeds.CanonicalPriceFeed as CanonicalPriceFeed
 import Melon.ThirdParty.Network.Ethereum.ABI.Codec (encodeSignature)
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth (getTransactionEvents)
 import Melon.Context
-import Melon.Deploy (deploy)
+import qualified Melon.Contract.Fund as Fund
+import qualified Melon.Contract.PriceFeed as PriceFeed
+import qualified Melon.Contract.Version as Version
 import Melon.Model
 
 
 tests :: IO Bool
-tests = checkParallel $$discover
+tests = do
+  manager <- newManager defaultManagerSettings
+  provider <- getProvider
+  checkParallel $ Group "Melon.Test.Commands"
+    [ ("prop_melonport", prop_melonport manager provider) ]
 
 
-prop_melonport :: Property
-prop_melonport = withTests 10 $ property $ do
+prop_melonport :: Manager -> Provider -> Property
+prop_melonport httpManager web3Provider = withTests 10 $ property $ do
   -- XXX: This repeats the full deployment for each test run.
   --   It might be better (certainly for performance) to only setup a new fund
   --   for each test-case, and share the same 'Version' instance between tests.
   -- XXX: Use a mocked external price feed. Calling out the cryptocompare
   --   every time is too slow. Could be randomly generated, which might be good
   --   for test-coverage.
-  (version, fund, priceFeed, updatePriceFeed, manager, assets) <- liftIO deploy
-  let mlnToken = version^.vdMlnToken
-      ethToken = version^.vdEthToken
+
+  (version, fund) <- runMelonT httpManager web3Provider $ hoistWeb3 $ do
+    owner:manager:_ <- liftWeb3 accounts
+    version <- Version.deploy owner
+    fund <- Fund.deploy version manager
+    pure (version, fund)
+
+  updatePriceFeed <- do
+    priceSource <- liftIO $
+      PriceFeed.makeConstantConvertedPrices "MLN" 18
+        [ (asset^.asCryptoCompareName, asset^.asDecimals)
+        | asset <- version^.vdAssets.to HashMap.elems
+        ]
+    pure $ PriceFeed.updateCanonicalPriceFeed
+      priceSource
+      (version^.vdCanonicalPriceFeed)
+      (version^.vdStakingPriceFeed)
+      (version^.vdOwner)
+      (version^.vdAssets.to HashMap.keys)
+
+  let input = ModelInput
+        { _miVersion = version
+        , _miFund = fund
+        , _miUpdatePriceFeed = updatePriceFeed
+        }
+
   actions <- forAll $
     Gen.sequential (Range.linear 1 100) initialModelState
-      [ checkSharePrice fund priceFeed assets
-      , checkFeeAllocation fund
-      , checkMakeOrderSharePrice fund manager updatePriceFeed mlnToken ethToken
+      [ checkSharePrice input
+      , checkFeeAllocation input
+      , checkMakeOrderSharePrice input
       ]
-  runMelonT $ executeSequential initialModelState actions
+  runMelonT httpManager web3Provider $
+    executeSequential initialModelState actions
 
 
 data ModelState (v :: * -> *) = ModelState
@@ -62,6 +94,13 @@ data ModelState (v :: * -> *) = ModelState
 
 initialModelState :: ModelState v
 initialModelState = ModelState
+
+
+evalWeb3
+  :: (MonadCatch m, MonadIO m, MonadTest m)
+  => Web3 a -> MelonT m a
+evalWeb3 = hoistWeb3 . liftWeb3
+{-# INLINE evalWeb3 #-}
 
 
 -- | Tests share-price invariant
@@ -74,28 +113,33 @@ initialModelState = ModelState
 -- @
 checkSharePrice
   :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
-  => Address -- ^ Melon fund
-  -> Address -- ^ Price-feed
-  -> [Address] -- ^ Owned assets
+  => ModelInput
   -> Command n (MelonT m) ModelState
-checkSharePrice fund priceFeed assets =
+checkSharePrice input =
   let
+    updatePriceFeed = input^.miUpdatePriceFeed
+    fund = input^.miFund.fdAddress
+    priceFeed = input^.miVersion.vdCanonicalPriceFeed
+    assets = input^.miVersion.vdAssets.to HashMap.keys
+
     gen _ = Just $ pure CheckSharePrice
-    execute CheckSharePrice = hoistWeb3 $ do
+    execute CheckSharePrice = do
       defaultCall <- view ctxCall
 
+      evalM $ hoistWeb3 $ updatePriceFeed
+
       let callPriceFeed = defaultCall { callTo = Just priceFeed }
-      (prices, _timestamps) <- liftWeb3 $
+      (prices, _timestamps) <- evalM $ evalWeb3 $
         CanonicalPriceFeed.getPrices callPriceFeed assets
 
-      balances <- liftWeb3 $ forM assets $ \asset -> do
+      balances <- evalM $ evalWeb3 $ forM assets $ \asset -> do
         let callAsset = defaultCall { callTo = Just asset }
         Asset.balanceOf callAsset fund
 
       let callFund = defaultCall { callTo = Just fund }
-      totalShares <- liftWeb3 $ Fund.totalSupply callFund
-      sharePrice <- liftWeb3 $ Fund.calcSharePrice callFund
-      decimals <- liftWeb3 $ Fund.getDecimals callFund
+      totalShares <- evalM $ evalWeb3 $ Fund.totalSupply callFund
+      sharePrice <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
+      decimals <- evalM $ evalWeb3 $ Fund.getDecimals callFund
 
       pure (prices, balances, totalShares, sharePrice, decimals)
   in
@@ -140,23 +184,28 @@ instance HTraversable CheckSharePrice where
 -- @
 checkFeeAllocation
   :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
-  => Address -- ^ Melon fund
+  => ModelInput
   -> Command n (MelonT m) ModelState
-checkFeeAllocation fund =
+checkFeeAllocation input =
   let
+    updatePriceFeed = input^.miUpdatePriceFeed
+    fund = input^.miFund.fdAddress
+
     gen _ = Just $ pure CheckFeeAllocation
-    execute CheckFeeAllocation = hoistWeb3 $ do
+    execute CheckFeeAllocation = do
       defaultCall <- view ctxCall
 
+      evalM $ hoistWeb3 $ updatePriceFeed
+
       let callFund = defaultCall { callTo = Just fund }
-      priceBeforeAlloc <- liftWeb3 $ Fund.calcSharePrice callFund
-      _ <- liftWeb3 $
+      priceBeforeAlloc <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
+      _ <- evalM $ evalWeb3 $
         Fund.calcSharePriceAndAllocateFees callFund
         >>= getTransactionEvents >>= \case
           [Fund.CalculationUpdate _ _ _ _ sharePrice _] -> pure sharePrice
           _ -> fail "calcSharePriceAndAllocateFees failed"
-      priceAfterAlloc <- liftWeb3 $ Fund.calcSharePrice callFund
-      decimals <- liftWeb3 $ Fund.getDecimals callFund
+      priceAfterAlloc <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
+      decimals <- evalM $ evalWeb3 $ Fund.getDecimals callFund
 
       pure (priceBeforeAlloc, priceAfterAlloc, decimals)
   in
@@ -188,14 +237,17 @@ checkMakeOrderSharePrice
   :: ( Monad n, MonadGen n, Monad m
      , MonadCatch m, MonadIO m, MonadTest m, MonadThrow m
      )
-  => Address -- ^ Melon fund
-  -> Address -- ^ Fund manager
-  -> MelonT Web3 () -- ^ Update the price feed
-  -> Address -- ^ Give asset
-  -> Address -- ^ Get asset
+  => ModelInput
   -> Command n (MelonT m) ModelState
-checkMakeOrderSharePrice fund manager updatePriceFeed giveAsset getAsset =
+checkMakeOrderSharePrice input =
   let
+    fund = input^.miFund.fdAddress
+    manager = input^.miFund.fdManager
+    updatePriceFeed = input^.miUpdatePriceFeed
+    -- XXX: Could we pick these at random?
+    giveAsset = input^.miVersion.vdMlnToken
+    getAsset = input^.miVersion.vdEthToken
+
     gen _ = Just $ CheckMakeOrderSharePrice
       -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
       --   Indeed this causes the call to SimpleAdapter (index 0) to fail.
@@ -207,19 +259,19 @@ checkMakeOrderSharePrice fund manager updatePriceFeed giveAsset getAsset =
       defaultCall <- view ctxCall
 
       let callFund = defaultCall { callTo = Just fund }
-      decimals <- evalM $ hoistWeb3 $ liftWeb3 $ Fund.getDecimals callFund
+      decimals <- evalM $ evalWeb3 $ Fund.getDecimals callFund
       -- Need to update the price feed here. Otherwise, 'calcSharePrice' might
       -- fail.
       -- XXX: Should we automatically run 'calcSharePrice' every so often?
       evalM $ hoistWeb3 $ updatePriceFeed
-      priceBeforeOrder <- evalM $ hoistWeb3 $ liftWeb3 $ Fund.calcSharePrice callFund
+      priceBeforeOrder <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
 
       let managerCallFund = callFund { callFrom = Just manager }
           -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
           --   Is that intentioal? Does that mean one of them will not be found?
           makeOrderSignature = encodeSignature (Proxy @MatchingMarketAdapter.MakeOrderData)
           nullAddress = "0x0000000000000000000000000000000000000000"
-      (evalM $ hoistWeb3 $ liftWeb3 $
+      (evalM $ evalWeb3 $
         Fund.callOnExchange managerCallFund
           exchangeIndex
           makeOrderSignature
@@ -237,7 +289,7 @@ checkMakeOrderSharePrice fund manager updatePriceFeed giveAsset getAsset =
             -- This test-case is not testing that aspect.
             annotate "makeOrder failed"
 
-      priceAfterOrder <- evalM $ hoistWeb3 $ liftWeb3 $ Fund.calcSharePrice callFund
+      priceAfterOrder <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
 
       pure (priceBeforeOrder, priceAfterOrder, decimals)
   in
