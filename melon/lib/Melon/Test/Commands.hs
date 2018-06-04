@@ -13,6 +13,7 @@ import Control.Exception.Safe (MonadCatch, MonadThrow)
 import Control.Lens
 import Control.Monad
 import Control.Monad.IO.Class (MonadIO (..))
+import Control.Monad.Trans.Class
 import qualified Data.HashMap.Strict as HashMap
 import Data.Proxy (Proxy (..))
 import Hedgehog
@@ -38,6 +39,7 @@ import Melon.Model.Input
 import Melon.Model.State
 
 
+-- | Executes all test-cases.
 tests :: IO Bool
 tests = do
   manager <- newManager defaultManagerSettings
@@ -46,59 +48,54 @@ tests = do
     [ ("prop_melonport", prop_melonport manager provider) ]
 
 
+-- | Defines the Melon fund state-machine test.
+--
+-- First, sets up a version and fund contract with some fixed and some random
+-- parameters. Then, generates a random sequence of commands to execute on
+-- the fund contract. Finally, executes these commands and checks specified
+-- invariants in-between. If a counter-example is discovered, the test-library
+-- will "shrink" the random inputs to try and uncover a minimal counter example.
+--
+-- "Shrinking" generally means to choose smaller values for parameters that
+-- where chosen at random. E.g. if, initially, a value of 10^17 was chosen for
+-- @managementFee@, then shrinking will check if the invariant still fails for
+-- smaller and smaller values of @managementFee@ until it hits the minimum
+-- value, zero in this case.
 prop_melonport :: Manager -> Provider -> Property
-prop_melonport httpManager web3Provider = withTests 10 $ property $ do
-  let hundredPercent = 10^(18::Int) :: UIntN 256
-  managementFee <- forAll $ Gen.integral (Range.linear 0 (hundredPercent - 1))
-  performanceFee <- forAll $ Gen.integral (Range.linear 0 (hundredPercent - 1))
+prop_melonport httpManager web3Provider =
+  withTests 10 $ property $
+  runMelonT httpManager web3Provider $ do
 
-  -- XXX: This repeats the full deployment for each test run.
-  --   It might be better (certainly for performance) to only setup a new fund
-  --   for each test-case, and share the same 'Version' instance between tests.
-  (version, fund, investors) <- runMelonT httpManager web3Provider $ do
-    owner:manager:investors <- liftWeb3 accounts
-    version <- Version.deploy owner
-    fund <- Fund.deploy version manager managementFee performanceFee
-    pure (version, fund, investors)
+  ----------------------------------------------------------
+  -- Determine fees
+  let hundredPercent = 10^(18::Int) :: UIntN 256
+  managementFee <- lift $ forAll $
+    Gen.integral (Range.linear 0 (hundredPercent - 1))
+  performanceFee <- lift $ forAll $
+    Gen.integral (Range.linear 0 (hundredPercent - 1))
+
+  ----------------------------------------------------------
+  -- Setup version and fund
+  owner:manager:investors <- liftWeb3 accounts
+  version <- Version.deploy owner
+  fund <- Fund.deploy version manager managementFee performanceFee
 
   -- Enable investment and redemption
   -- XXX: Move this into tests and make it part of the model.
-  runMelonT httpManager web3Provider $ do
-    defaultCall <- getCall
-    let managerCallFund = defaultCall
-          { callFrom = Just $ fund^.fdManager
-          , callTo = Just $ fund^.fdAddress
-          }
-        assets = version^.vdAssets.to HashMap.keys
-    void $ liftWeb3 $ Fund.enableInvestment managerCallFund assets
-    void $ liftWeb3 $ Fund.enableRedemption managerCallFund assets
+  defaultCall <- getCall
+  let managerCallFund = defaultCall
+        { callFrom = Just $ fund^.fdManager
+        , callTo = Just $ fund^.fdAddress
+        }
+      assets = version^.vdAssets.to HashMap.keys
+  void $ liftWeb3 $ Fund.enableInvestment managerCallFund assets
+  void $ liftWeb3 $ Fund.enableRedemption managerCallFund assets
 
+  ----------------------------------------------------------
+  -- Setup price feed update
   updatePriceFeed <- do
-    priceSourceSpec <- forAll $ do
-      let numAssets = HashMap.size (version^.vdAssets)
-          unrealisticCyclicPriceSource =
-            fmap PriceFeed.UnrealisticCyclicPriceSource $
-              Gen.list (Range.linear 1 100) $ -- a cycle of up to 100 prices
-                Gen.list (Range.singleton numAssets) $ -- one price per asset
-                  -- XXX:
-                  --   The CanonicalPriceFeed.collectAndUpdate operation does
-                  --   not complete on an all zero price update, or an update
-                  --   of the form @[0, 1, 1]@.
-                  --   However, the StakingPriceFeed.update operation accepts
-                  --   an all zero price update.
-                  -- Gen.integral (Range.linear 0 maxBound)
-                  Gen.integral (Range.linear 1 maxBound)
-          realisticConstantPriceSource = pure $
-            PriceFeed.RealisticConstantPriceSource "MLN" 18
-              [ (asset^.asCryptoCompareName, asset^.asDecimals)
-              | asset <- version^.vdAssets.to HashMap.elems
-              ]
-      Gen.frequency
-        [ (1, unrealisticCyclicPriceSource)
-        , (2, realisticConstantPriceSource)
-        ]
+    priceSourceSpec <- lift $ forAll $ genPriceSource version
     priceSource <- liftIO $ PriceFeed.instantiatePriceSource priceSourceSpec
-
     pure $ PriceFeed.updateCanonicalPriceFeed
       priceSource
       (version^.vdCanonicalPriceFeed)
@@ -106,12 +103,17 @@ prop_melonport httpManager web3Provider = withTests 10 $ property $ do
       (version^.vdOwner)
       (version^.vdAssets.to HashMap.keys)
 
+  ----------------------------------------------------------
+  -- Test model input
   let input = ModelInput
         { _miVersion = version
         , _miFund = fund
         , _miUpdatePriceFeed = updatePriceFeed
         , _miInvestors = investors
         }
+
+  ----------------------------------------------------------
+  -- Footnotes
 
   -- Available assets
   -- XXX: Make this prettier.
@@ -120,15 +122,51 @@ prop_melonport httpManager web3Provider = withTests 10 $ property $ do
     | (address, asset) <- input^.miVersion.vdAssets.to HashMap.toList
     ]
 
-  actions <- forAll $
+  ----------------------------------------------------------
+  -- Execute commands
+
+  actions <- lift $ forAll $
     Gen.sequential (Range.linear 1 100) initialModelState
       [ checkSharePrice input
       , checkFeeAllocation input
       , checkMakeOrderSharePrice input
       , checkRequestInvestment input
       ]
-  runMelonT httpManager web3Provider $
-    executeSequential initialModelState actions
+  executeSequential initialModelState actions
+
+
+-- | Randomly generate a price-source specification
+genPriceSource :: MonadGen m
+  => VersionDeployment -> m PriceFeed.PriceSourceSpec
+genPriceSource version = do
+  let numAssets = HashMap.size (version^.vdAssets)
+      -- Takes a random list of asset prices and cycles through them.
+      unrealisticCyclicPriceSource =
+        fmap PriceFeed.UnrealisticCyclicPriceSource $
+          Gen.list (Range.linear 1 100) $ -- a cycle of up to 100 prices
+            Gen.list (Range.singleton numAssets) $ -- one price per asset
+              -- XXX:
+              --   The CanonicalPriceFeed.collectAndUpdate operation does
+              --   not complete on an all zero price update, or an update
+              --   of the form @[0, 1, 1]@.
+              --   However, the StakingPriceFeed.update operation accepts
+              --   an all zero price update.
+              -- Gen.integral (Range.linear 0 maxBound)
+              Gen.integral (Range.linear 1 maxBound)
+      -- Does one lookup on CryptoCompare and then repeats these prices.
+      realisticConstantPriceSource = pure $
+        PriceFeed.RealisticConstantPriceSource "MLN" 18
+          [ (asset^.asCryptoCompareName, asset^.asDecimals)
+          | asset <- version^.vdAssets.to HashMap.elems
+          ]
+  Gen.frequency
+    [ (1, unrealisticCyclicPriceSource)
+    , (2, realisticConstantPriceSource)
+    ]
+
+
+----------------------------------------------------------------------
+-- Commands and Invariants
 
 
 -- | Tests share-price invariant
