@@ -7,12 +7,10 @@ module Melon.Contract.Governance
   ) where
 
 import Control.Exception.Safe (Exception (..), throw)
-import Control.Lens ((^.))
 import Data.Typeable (Typeable)
 import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Bytes (Bytes)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
-import Network.Ethereum.Web3.Provider (Web3)
 import Network.Ethereum.Web3.Types (Call (..))
 
 import qualified Melon.ABI.System.Governance as Governance
@@ -21,59 +19,62 @@ import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 
 
 deploy
-  :: Address
+  :: MonadMelon m
+  => Address
     -- ^ Owner
-  -> MelonT Web3 Address
+  -> m Address
     -- ^ Returns the contract address
-deploy owner = withContext $ \ctx -> do
-  let ownerCall = (ctx^.ctxCall) { callFrom = Just owner }
+deploy owner = do
+  defaultCall <- getCall
+  let ownerCall = defaultCall { callFrom = Just owner }
       authorities = [owner]
       quorum = 1
       window = 100000
-  tx <- Governance.constructor ownerCall authorities quorum window
-  getContractAddress tx
+  tx <- liftWeb3 $ Governance.constructor ownerCall authorities quorum window
+  liftWeb3 $ getContractAddress tx
 
 
 -- | Propose, confirm, and trigger governance action.
 -- Only works with quorum of one.
 action
-  :: Address -- ^ Governance contract address
+  :: MonadMelon m
+  => Address -- ^ Governance contract address
   -> Address -- ^ Single quorum governor
   -> Address -- ^ Target contract address
   -> Bytes -- ^ Encoded call data
   -> UIntN 256 -- ^ Call value
-  -> MelonT Web3 ()
-action governance governor target calldata value
-  = withContext $ \ctx -> do
-
-  let governorCallGovernance = (ctx^.ctxCall)
+  -> m ()
+action governance governor target calldata value = do
+  defaultCall <- getCall
+  let governorCallGovernance = defaultCall
         { callFrom = Just governor
         , callTo = Just governance
         }
-  proposeTx <- Governance.propose governorCallGovernance
-    target calldata value
-  proposalId <- getTransactionEvents proposeTx >>= \case
-    [Governance.Proposed proposalId calldata']
-      | calldata' == calldata -> return proposalId
-      | otherwise -> throw ProposedCallDataMismatch
-    [] -> throw NoProposedEvent
-    _ -> throw TooManyProposedEvents
-  confirmTx <- Governance.confirm governorCallGovernance
-    proposalId
-  getTransactionEvents confirmTx >>= \case
-    [Governance.Confirmed proposalId' _]
-      | proposalId' == proposalId -> return ()
-      | otherwise -> throw ConfirmedProposalIdMismatch
-    [] -> throw NoConfirmedEvent
-    _ -> throw TooManyConfirmedEvents
-  triggerTx <- Governance.trigger governorCallGovernance
-    proposalId
-  getTransactionEvents triggerTx >>= \case
-    [Governance.Triggered proposalId']
-      | proposalId' == proposalId -> return ()
-      | otherwise -> throw TriggeredProposalIdMismatch
-    [] -> throw NoTriggeredEvent
-    _ -> throw TooManyTriggeredEvents
+  liftWeb3 $ do
+    proposeTx <- Governance.propose governorCallGovernance
+      target calldata value
+    proposalId <- getTransactionEvents proposeTx >>= \case
+      [Governance.Proposed proposalId calldata']
+        | calldata' == calldata -> return proposalId
+        | otherwise -> throw ProposedCallDataMismatch
+      [] -> throw NoProposedEvent
+      _ -> throw TooManyProposedEvents
+    confirmTx <- Governance.confirm governorCallGovernance
+      proposalId
+    getTransactionEvents confirmTx >>= \case
+      [Governance.Confirmed proposalId' _]
+        | proposalId' == proposalId -> return ()
+        | otherwise -> throw ConfirmedProposalIdMismatch
+      [] -> throw NoConfirmedEvent
+      _ -> throw TooManyConfirmedEvents
+    triggerTx <- Governance.trigger governorCallGovernance
+      proposalId
+    getTransactionEvents triggerTx >>= \case
+      [Governance.Triggered proposalId']
+        | proposalId' == proposalId -> return ()
+        | otherwise -> throw TriggeredProposalIdMismatch
+      [] -> throw NoTriggeredEvent
+      _ -> throw TooManyTriggeredEvents
 
 
 -- | Errors occurring during governance actions.

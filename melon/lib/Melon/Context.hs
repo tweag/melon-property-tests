@@ -6,12 +6,14 @@ module Melon.Context
   ( MelonT (..)
   , runMelonT
   , withContext
-  , liftWeb3
-  , hoistWeb3
-  , runWeb3Throw
+
+  , MonadWeb3 (..)
+  , MonadMelon (..)
 
   , Context (..)
   , ctxCall
+  , ctxProvider
+  , ctxManager
 
   , Manager
   , Provider
@@ -21,7 +23,6 @@ module Melon.Context
 import Control.Exception.Safe (MonadCatch, MonadThrow, throw)
 import Control.Lens (view)
 import Control.Lens.TH (makeClassy)
-import Control.Monad ((<=<))
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Morph (MFunctor (..))
 import Control.Monad.Reader (MonadReader, ReaderT (..))
@@ -64,20 +65,23 @@ runMelonT manager provider (MelonT action) = runReaderT action Context
 withContext :: (Context -> m a) -> MelonT m a
 withContext = MelonT . ReaderT
 
-liftWeb3 :: Web3 a -> MelonT Web3 a
-liftWeb3 = lift
 
-runWeb3Throw
-  :: (MonadIO m, MonadThrow m)
-  => Manager -> Provider -> Web3 a -> m a
-runWeb3Throw manager provider =
-  either throw return <=< runWeb3With manager provider
+class MonadIO m => MonadWeb3 m where
+  liftWeb3 :: Web3 a -> m a
+instance (MonadIO m, MonadThrow m) => MonadWeb3 (MelonT m) where
+  liftWeb3 action = do
+    manager <- view ctxManager
+    provider <- view ctxProvider
+    r <- runWeb3With manager provider action
+    case r of
+      Left err -> throw err
+      Right x -> pure x
 
-hoistWeb3 :: (MonadIO m, MonadThrow m) => MelonT Web3 a -> MelonT m a
-hoistWeb3 action = do
-  manager <- view ctxManager
-  provider <- view ctxProvider
-  hoist (runWeb3Throw manager provider) action
+
+class MonadWeb3 m => MonadMelon m where
+  getCall :: m Call
+instance (MonadIO m, MonadThrow m) => MonadMelon (MelonT m) where
+  getCall = view ctxCall
 
 
 getProvider :: IO Provider

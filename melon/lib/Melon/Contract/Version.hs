@@ -13,7 +13,6 @@ import qualified Data.List as List
 import qualified Data.Text as T
 import Data.Proxy (Proxy (..))
 import Network.Ethereum.ABI.Prim.Address (Address)
-import Network.Ethereum.Web3.Provider
 import Network.Ethereum.Web3.Types
 
 import qualified Melon.ABI.Compliance.NoCompliance as NoCompliance
@@ -38,12 +37,13 @@ import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 
 -- | Deploy version contract and surrounding modules.
 deploy
-  :: Address
+  :: MonadMelon m
+  => Address
     -- ^ Owner
-  -> MelonT Web3 VersionDeployment
+  -> m VersionDeployment
     -- ^ Returns deployment
 deploy owner = do
-  defaultCall <- view ctxCall
+  defaultCall <- getCall
   let ownerCall = defaultCall { callFrom = Just owner }
 
   -- XXX: Replace calls to 'error' with dedicated exceptions.

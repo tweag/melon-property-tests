@@ -8,7 +8,6 @@ module Melon.Contract.Fund
 import Control.Lens
 import Control.Monad (unless)
 import Network.Ethereum.ABI.Prim.Address (Address)
-import Network.Ethereum.Web3.Provider (Web3)
 import Network.Ethereum.Web3.Types (Call (..))
 
 import qualified Melon.ABI.Version.Version as Version
@@ -19,13 +18,14 @@ import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 
 
 deploy
-  :: VersionDeployment
+  :: MonadMelon m
+  => VersionDeployment
     -- ^ The version contract and modules.
   -> Address
     -- ^ The fund manager.
-  -> MelonT Web3 FundDeployment
+  -> m FundDeployment
 deploy version manager = do
-  defaultCall <- withContext $ \ctx -> pure (ctx^.ctxCall)
+  defaultCall <- getCall
   let managerCall = defaultCall { callFrom = Just manager }
       callVersion = defaultCall { callTo = Just $ version^.vdAddress }
       managerCallVersion = managerCall { callTo = Just $ version^.vdAddress }

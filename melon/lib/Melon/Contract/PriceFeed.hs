@@ -22,7 +22,6 @@ import Data.Traversable (for)
 import Data.Typeable (Typeable)
 import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
-import Network.Ethereum.Web3.Provider (Web3)
 import Network.Ethereum.Web3.Types (Call (..))
 import Network.Wreq
 import Numeric.Decimal
@@ -37,19 +36,20 @@ import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 
 
 deploy
-  :: Address
+  :: MonadMelon m
+  => Address
     -- ^ Owner
   -> Address
     -- ^ Melon token address
   -> Address
     -- ^ Governance contract address
-  -> MelonT Web3 (Address, Address)
+  -> m (Address, Address)
     -- ^ Returns canonical and staking price feed addresses
 deploy owner mlnToken governance = do
   canonicalPriceFeed <- deployCanonicalPriceFeed owner mlnToken governance
   stakingPriceFeed <- deployStakingPriceFeed owner mlnToken canonicalPriceFeed
 
-  defaultCall <- view ctxCall
+  defaultCall <- getCall
   let ownerCall = defaultCall { callFrom = Just owner }
       amountToStake = 1000000 :: UIntN 256
 
@@ -72,17 +72,19 @@ deploy owner mlnToken governance = do
   pure (canonicalPriceFeed, stakingPriceFeed)
 
 deployCanonicalPriceFeed
-  :: Address
+  :: MonadMelon m
+  => Address
     -- ^ Owner
   -> Address
     -- ^ Melon token address
   -> Address
     -- ^ Governance contract address
-  -> MelonT Web3 Address
+  -> m Address
     -- ^ Returns price feed address
-deployCanonicalPriceFeed owner mlnToken governance = withContext $ \ctx -> do
-  let ownerCall = (ctx^.ctxCall) { callFrom = Just owner }
-  tx <- CanonicalPriceFeed.constructor ownerCall
+deployCanonicalPriceFeed owner mlnToken governance = do
+  defaultCall <- getCall
+  let ownerCall = defaultCall { callFrom = Just owner }
+  tx <- liftWeb3 $ CanonicalPriceFeed.constructor ownerCall
     mlnToken -- quote asset
     "Melon Token" -- quote asset name
     "MLN-T" -- quote asset symbol
@@ -96,24 +98,26 @@ deployCanonicalPriceFeed owner mlnToken governance = withContext $ \ctx -> do
     [0, 60] -- update-info: interval, validity
     [1000000, 4] -- staking-info: minStake, numOperators
     governance -- address of Governance
-  getContractAddress tx
+  liftWeb3 $ getContractAddress tx
 
 deployStakingPriceFeed
-  :: Address
+  :: MonadMelon m
+  => Address
     -- ^ Owner
   -> Address
     -- ^ Melon token address
   -> Address
     -- ^ CanonicalPriceFeed address
-  -> MelonT Web3 Address
+  -> m Address
     -- ^ Returns price feed address
-deployStakingPriceFeed owner mlnToken canonicalPriceFeed = withContext $ \ctx -> do
-  let ownerCall = (ctx^.ctxCall) { callFrom = Just owner }
-  tx <- StakingPriceFeed.constructor ownerCall
+deployStakingPriceFeed owner mlnToken canonicalPriceFeed = do
+  defaultCall <- getCall
+  let ownerCall = defaultCall { callFrom = Just owner }
+  tx <- liftWeb3 $ StakingPriceFeed.constructor ownerCall
     canonicalPriceFeed -- canonical registrar address
     mlnToken -- quote asset
     canonicalPriceFeed -- superfeed address
-  getContractAddress tx
+  liftWeb3 $ getContractAddress tx
 
 
 mockBytes :: T.Text
@@ -130,33 +134,34 @@ type PriceSource = IO [UIntN 256]
 
 -- | Fetch current prices from the given source and update the price-feed.
 updateCanonicalPriceFeed
-  :: PriceSource
+  :: MonadMelon m
+  => PriceSource
   -> Address -- ^ CanonicalPriceFeed contract address
   -> Address -- ^ StakingPriceFeed contract address
   -> Address -- ^ Contract owner address
   -> [Address] -- ^ List of token addresses
-  -> MelonT Web3 ()
-updateCanonicalPriceFeed source canonical staking owner assets =
-  withContext $ \ctx -> do
+  -> m ()
+updateCanonicalPriceFeed source canonical staking owner assets = do
 
   prices <- liftIO source
 
-  let ownerCallStaking = (ctx^.ctxCall)
+  defaultCall <- getCall
+  let ownerCallStaking = defaultCall
         { callFrom = Just owner
         , callTo = Just staking
         }
-  StakingPriceFeed.update ownerCallStaking
+  liftWeb3 $ StakingPriceFeed.update ownerCallStaking
     assets -- list of asset addresses
     prices -- list of asset prices
     >>= getTransactionEvents >>= \case
       [StakingPriceFeed.PriceUpdated _] -> pure ()
       _ -> throw ExpectedOnePriceUpdateEvent
 
-  let ownerCallCanonical = (ctx^.ctxCall)
+  let ownerCallCanonical = defaultCall
         { callFrom = Just owner
         , callTo = Just canonical
         }
-  CanonicalPriceFeed.collectAndUpdate ownerCallCanonical
+  liftWeb3 $ CanonicalPriceFeed.collectAndUpdate ownerCallCanonical
     assets -- list of asset addresses
     >>= getTransactionEvents >>= \case
       [CanonicalPriceFeed.PriceUpdated _] -> pure ()

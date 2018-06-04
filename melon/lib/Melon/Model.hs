@@ -1,5 +1,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Melon.Model where
@@ -11,17 +14,16 @@ import GHC.Generics (Generic)
 import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Bytes (BytesN)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
-import Network.Ethereum.Web3.Provider (Web3)
 
 import Melon.Context (MelonT)
 
 
-data ModelInput = ModelInput
+data ModelInput m = ModelInput
   { _miVersion :: VersionDeployment
     -- ^ The version deployment.
   , _miFund :: FundDeployment
     -- ^ The fund deployment.
-  , _miUpdatePriceFeed :: MelonT Web3 ()
+  , _miUpdatePriceFeed :: MelonT m ()
     -- ^ The action to update the price feed.
   } deriving Generic
 

@@ -20,7 +20,6 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Network.Ethereum.ABI.Prim.Int (UIntN)
 import Network.Ethereum.Web3.Eth (accounts)
-import Network.Ethereum.Web3.Provider (Web3)
 import Network.Ethereum.Web3.Types (Call (..))
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 
@@ -54,7 +53,7 @@ prop_melonport httpManager web3Provider = withTests 10 $ property $ do
   --   every time is too slow. Could be randomly generated, which might be good
   --   for test-coverage.
 
-  (version, fund) <- runMelonT httpManager web3Provider $ hoistWeb3 $ do
+  (version, fund) <- runMelonT httpManager web3Provider $ do
     owner:manager:_ <- liftWeb3 accounts
     version <- Version.deploy owner
     fund <- Fund.deploy version manager
@@ -96,13 +95,6 @@ initialModelState :: ModelState v
 initialModelState = ModelState
 
 
-evalWeb3
-  :: (MonadCatch m, MonadIO m, MonadTest m)
-  => Web3 a -> MelonT m a
-evalWeb3 = hoistWeb3 . liftWeb3
-{-# INLINE evalWeb3 #-}
-
-
 -- | Tests share-price invariant
 --
 -- Invariant of Sum of asset balances times their price (according to price
@@ -113,7 +105,7 @@ evalWeb3 = hoistWeb3 . liftWeb3
 -- @
 checkSharePrice
   :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
-  => ModelInput
+  => ModelInput m
   -> Command n (MelonT m) ModelState
 checkSharePrice input =
   let
@@ -126,20 +118,20 @@ checkSharePrice input =
     execute CheckSharePrice = do
       defaultCall <- view ctxCall
 
-      evalM $ hoistWeb3 $ updatePriceFeed
+      evalM $ updatePriceFeed
 
       let callPriceFeed = defaultCall { callTo = Just priceFeed }
-      (prices, _timestamps) <- evalM $ evalWeb3 $
+      (prices, _timestamps) <- evalM $ liftWeb3 $
         CanonicalPriceFeed.getPrices callPriceFeed assets
 
-      balances <- evalM $ evalWeb3 $ forM assets $ \asset -> do
+      balances <- evalM $ liftWeb3 $ forM assets $ \asset -> do
         let callAsset = defaultCall { callTo = Just asset }
         Asset.balanceOf callAsset fund
 
       let callFund = defaultCall { callTo = Just fund }
-      totalShares <- evalM $ evalWeb3 $ Fund.totalSupply callFund
-      sharePrice <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
-      decimals <- evalM $ evalWeb3 $ Fund.getDecimals callFund
+      totalShares <- evalM $ liftWeb3 $ Fund.totalSupply callFund
+      sharePrice <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
+      decimals <- evalM $ liftWeb3 $ Fund.getDecimals callFund
 
       pure (prices, balances, totalShares, sharePrice, decimals)
   in
@@ -184,7 +176,7 @@ instance HTraversable CheckSharePrice where
 -- @
 checkFeeAllocation
   :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
-  => ModelInput
+  => ModelInput m
   -> Command n (MelonT m) ModelState
 checkFeeAllocation input =
   let
@@ -195,17 +187,17 @@ checkFeeAllocation input =
     execute CheckFeeAllocation = do
       defaultCall <- view ctxCall
 
-      evalM $ hoistWeb3 $ updatePriceFeed
+      evalM $ updatePriceFeed
 
       let callFund = defaultCall { callTo = Just fund }
-      priceBeforeAlloc <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
-      _ <- evalM $ evalWeb3 $
+      priceBeforeAlloc <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
+      _ <- evalM $ liftWeb3 $
         Fund.calcSharePriceAndAllocateFees callFund
         >>= getTransactionEvents >>= \case
           [Fund.CalculationUpdate _ _ _ _ sharePrice _] -> pure sharePrice
           _ -> fail "calcSharePriceAndAllocateFees failed"
-      priceAfterAlloc <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
-      decimals <- evalM $ evalWeb3 $ Fund.getDecimals callFund
+      priceAfterAlloc <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
+      decimals <- evalM $ liftWeb3 $ Fund.getDecimals callFund
 
       pure (priceBeforeAlloc, priceAfterAlloc, decimals)
   in
@@ -237,7 +229,7 @@ checkMakeOrderSharePrice
   :: ( Monad n, MonadGen n, Monad m
      , MonadCatch m, MonadIO m, MonadTest m, MonadThrow m
      )
-  => ModelInput
+  => ModelInput m
   -> Command n (MelonT m) ModelState
 checkMakeOrderSharePrice input =
   let
@@ -256,22 +248,22 @@ checkMakeOrderSharePrice input =
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
     execute (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity) = do
-      defaultCall <- view ctxCall
+      defaultCall <- getCall
 
       let callFund = defaultCall { callTo = Just fund }
-      decimals <- evalM $ evalWeb3 $ Fund.getDecimals callFund
+      decimals <- evalM $ liftWeb3 $ Fund.getDecimals callFund
       -- Need to update the price feed here. Otherwise, 'calcSharePrice' might
       -- fail.
       -- XXX: Should we automatically run 'calcSharePrice' every so often?
-      evalM $ hoistWeb3 $ updatePriceFeed
-      priceBeforeOrder <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
+      evalM $ updatePriceFeed
+      priceBeforeOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
       let managerCallFund = callFund { callFrom = Just manager }
           -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
           --   Is that intentioal? Does that mean one of them will not be found?
           makeOrderSignature = encodeSignature (Proxy @MatchingMarketAdapter.MakeOrderData)
           nullAddress = "0x0000000000000000000000000000000000000000"
-      (evalM $ evalWeb3 $
+      evalM $ (liftWeb3 $
         Fund.callOnExchange managerCallFund
           exchangeIndex
           makeOrderSignature
@@ -289,7 +281,7 @@ checkMakeOrderSharePrice input =
             -- This test-case is not testing that aspect.
             annotate "makeOrder failed"
 
-      priceAfterOrder <- evalM $ evalWeb3 $ Fund.calcSharePrice callFund
+      priceAfterOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
       pure (priceBeforeOrder, priceAfterOrder, decimals)
   in
