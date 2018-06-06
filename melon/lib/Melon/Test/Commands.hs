@@ -4,7 +4,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 
 module Melon.Test.Commands where
@@ -317,7 +316,7 @@ checkSharePrice input =
     execute CheckSharePrice = do
       defaultCall <- view ctxCall
 
-      evalM $ updatePriceFeed
+      evalM updatePriceFeed
 
       let callPriceFeed = defaultCall { callTo = Just priceFeed }
       (prices, _timestamps) <- evalM $ liftWeb3 $
@@ -460,7 +459,7 @@ checkMakeOrderSharePrice input =
       -- Need to update the price feed here. Otherwise, 'calcSharePrice' might
       -- fail.
       -- XXX: Should we automatically run 'calcSharePrice' every so often?
-      evalM $ updatePriceFeed
+      evalM updatePriceFeed
       priceBeforeOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
       let managerCallFund = callFund { callFrom = Just manager }
@@ -468,8 +467,8 @@ checkMakeOrderSharePrice input =
           --   Is that intentioal? Does that mean one of them will not be found?
           makeOrderSignature = encodeSignature (Proxy @MatchingMarketAdapter.MakeOrderData)
           nullAddress = "0x0000000000000000000000000000000000000000"
-      evalM $ (liftWeb3 $
-        Fund.callOnExchange managerCallFund
+      evalM $ liftWeb3
+        (Fund.callOnExchange managerCallFund
           exchangeIndex
           makeOrderSignature
           -- maker, taker, giveAsset, getAsset, feeRecipient
