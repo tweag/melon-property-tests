@@ -19,6 +19,7 @@ library
   exposed-modules:     Melon.ABI.Assets.Asset
                        Melon.ABI.Assets.ERC223Interface
                        Melon.ABI.Assets.PreminedAsset
+                       Melon.ABI.Assets.Shares
                        Melon.ABI.Compliance.NoCompliance
                        Melon.ABI.Exchange.Adapter.CentralizedAdapter
                        Melon.ABI.Exchange.Adapter.MatchingMarketAdapter

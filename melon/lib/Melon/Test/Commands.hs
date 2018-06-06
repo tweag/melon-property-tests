@@ -48,8 +48,16 @@ tests :: IO Bool
 tests = do
   manager <- newManager defaultManagerSettings
   provider <- getProvider
-  checkParallel $ Group "Melon.Test.Commands"
-    [ ("prop_melonport", prop_melonport 20 100 manager provider) ]
+  checkSequential $ Group "Melon.Test.Commands"
+    [ ("prop_melonport", prop_melonport 20 200 manager provider) ]
+
+
+--  > recheck (Size 8) (Seed 9082926469563838346 (-5629536107532025561)) <property>
+recheck_prop_melonport :: Size -> Seed -> IO ()
+recheck_prop_melonport size seed = do
+  manager <- newManager defaultManagerSettings
+  provider <- getProvider
+  recheck size seed (prop_melonport 20 200 manager provider)
 
 
 -- | Defines the Melon fund state-machine test.
@@ -67,7 +75,10 @@ tests = do
 -- value, zero in this case.
 prop_melonport :: TestLimit -> Int -> Manager -> Provider -> Property
 prop_melonport numTests numCommands httpManager web3Provider =
-  withTests numTests $ property $
+  withTests numTests $
+  withShrinks 0 $
+  withRetries 0 $
+  property $
   runMelonT httpManager web3Provider $ do
 
   ----------------------------------------------------------
@@ -115,8 +126,10 @@ prop_melonport numTests numCommands httpManager web3Provider =
         , _miInvestors = investors
         }
       state = ModelState
-        { _msDecimals = fromMaybe 0 $
+        { _msQuoteAsset = version^.vdMlnToken
+        , _msQuoteDecimals = fromMaybe 0 $
             version^?vdAssets.ix (version^.vdMlnToken).asDecimals.to fromIntegral
+        , _msDecimals = fmap (fromIntegral . _asDecimals) $ version^.vdAssets
         , _msPriceUpdateId = 1
         , _msPrices = prices
         , _msPriceFeed = priceFeed
@@ -124,6 +137,7 @@ prop_melonport numTests numCommands httpManager web3Provider =
         , _msAssetBalances = mempty
         , _msIsShutdown = False
         , _msInvestments = []
+        , _msInvestorAssets = mempty
         }
 
   ----------------------------------------------------------
@@ -152,12 +166,12 @@ prop_melonport numTests numCommands httpManager web3Provider =
 
   actions <- lift $ forAll $
     Gen.sequential (Range.linear 1 numCommands) state
-      [ checkIsFundShutdown input
-      , managerCanShutdownFund input
-      , requestAffordableInvestment input
+      [ cmdUpdatePriceFeed input
+      , checkSharePrice input
+      , requestValidInvestment input
       , executeValidInvestment input
-      , cmdUpdatePriceFeed input
-      -- , checkSharePrice input
+      -- , checkIsFundShutdown input
+      -- , managerCanShutdownFund input
       -- , checkFeeAllocation input
       -- , checkMakeOrderSharePrice input
       -- , checkRequestInvestment input
@@ -192,6 +206,11 @@ genPriceFeedSpec version = do
     [ (1, unrealisticCyclicPriceSource)
     , (2, realisticConstantPriceSource)
     ]
+
+
+-- | @truncateTo requestedPrecision givenDecimals givenValue@.
+truncateTo :: (Integral d, Integral v) => d -> d -> v -> v
+truncateTo precision decimals value = value `div` (10^(decimals - precision))
 
 
 ----------------------------------------------------------------------
@@ -229,7 +248,7 @@ checkIsFundShutdown input =
 -- | @CmdShutdownFund account@
 --
 -- The given @account@ will attempt to shut-down the fund.
-data CmdShutdownFund (v :: * -> *)
+newtype CmdShutdownFund (v :: * -> *)
   = CmdShutdownFund Address
   deriving (Eq, Show)
 instance HTraversable CmdShutdownFund where
@@ -308,34 +327,35 @@ managerCanShutdownFund input =
 -- | An investment request command.
 data CmdRequestInvestment (v :: * -> *)
   = CmdRequestInvestment
-      Address -- ^ Investor
-      Address -- ^ Asset
-      (UIntN 256) -- ^ Give amount
-      (UIntN 256) -- ^ Share amount
+      !Address -- ^ Investor
+      !Address -- ^ Asset
+      !(UIntN 256) -- ^ Give amount
+      !(UIntN 256) -- ^ Share amount
   deriving (Eq, Show)
 instance HTraversable CmdRequestInvestment where
   htraverse _ (CmdRequestInvestment investor asset give share)
     = pure $ CmdRequestInvestment investor asset give share
 
--- | Request an affordable investment.
+-- | Request a valid investment.
 --
--- Choose an existing investor and asset and request an investment for
--- arbitrary give and share amounts. The give amount will be transferred to
--- the investor and approved for fund investment so that the investor can
--- afford the investment.
+-- Choose an existing investor and asset and request an investment with give
+-- and share amounts, such that the investor will be able to afford it and the
+-- give amount is compatible to the share price. The give amount will be
+-- transferred to the investor and approved for fund investment so that the
+-- investor can afford the investment.
 --
 -- XXX: This test-case assumes that investment is always allowed.
 --   Currently, investment requests will always be allowed as long as
 --   investment in the particular asset is allowed. This will change once
 --   compliance is implemented.
-requestAffordableInvestment
+requestValidInvestment
   :: (Monad n, MonadGen n, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
   => ModelInput
   -> Command n (MelonT m) ModelState
-requestAffordableInvestment input =
+requestValidInvestment input =
   let
-    owner = input^.miVersion.vdOwner
     fund = input^.miFund.fdAddress
+    quoteAsset = input^.miVersion.vdMlnToken
 
     gen s
       | s^.msIsShutdown = Nothing
@@ -344,36 +364,40 @@ requestAffordableInvestment input =
           asset <- Gen.element (input^.miVersion.vdAssets.to HashMap.keys)
           -- The premined assets hold 10^28 in supply. Here we stay well below
           -- that amount and assume that the supply is endless.
-          give <- Gen.integral (Range.linear 0 (10^(24::Int)))
-          share <- Gen.integral (Range.linear 0 (10^(24::Int)))
+
+          let quoteDecimals = s^.msQuoteDecimals
+              assetDecimals = s^.msAssetDecimals asset
+              sharePrice = s^.msSharePrice
+              invAssetPrice = s^.msInvertedAssetPrice asset
+
+          -- We first choose shares for what cost we want to buy.
+          cost <- Gen.integral (Range.linear 0 (10^(23::Int)))
+          -- Then we determine how many shares it buys us.
+          share <-
+            if sharePrice == 0 || invAssetPrice == 0 then
+              -- If shares are free we can buy arbitrarily many.
+              Gen.integral (Range.linear 0 maxBound)
+            else if asset /= quoteAsset then
+              -- Note, this shouldn't overflow on UIntN 256.
+              pure $
+                (cost * (10^quoteDecimals) * (10^assetDecimals))
+                `div` sharePrice
+                `div` invAssetPrice
+            else
+              -- Note, this shouldn't overflow on UIntN 256.
+              pure $
+                (cost * (10^quoteDecimals))
+                `div` sharePrice
+          let actualCost = s^.msShareCost share asset assetDecimals
+          -- Give more than it costs.
+          give <- Gen.integral (Range.linear actualCost (10^(24::Int)))
           pure $ CmdRequestInvestment investor asset give share
     execute (CmdRequestInvestment investor asset give share) = do
       defaultCall <- getCall
-      let ownerCallAsset = defaultCall
-            { callFrom = Just owner
-            , callTo = Just asset
-            }
-          investorCallAsset = defaultCall
-            { callFrom = Just investor
-            , callTo = Just asset
-            }
-          investorCallFund = defaultCall
+      let investorCallFund = defaultCall
             { callFrom = Just investor
             , callTo = Just fund
             }
-      -- Owner transfers the required amount to the investor.
-      evalM $ liftWeb3 $
-        Asset.transfer ownerCallAsset investor give
-        >>= getTransactionEvents >>= \case
-          [Asset.Transfer {}] -> pure ()
-          _ -> fail "Failed to transfer give amount to investor."
-      -- Investor allows transfer to fund.
-      evalM $ liftWeb3 $
-        Asset.approve investorCallAsset fund give
-        >>= getTransactionEvents >>= \case
-          [Asset.Approval {}] -> pure ()
-          _ -> fail "Failed to approve give amount for fund."
-      -- Request the investment.
       evalM $ liftWeb3 $
         Fund.requestInvestment investorCallFund give share asset
         >>= getTransactionEvents >>= \case
@@ -396,7 +420,7 @@ requestAffordableInvestment input =
     ]
 
 
-data CmdExecuteInvestment (v :: * -> *)
+newtype CmdExecuteInvestment (v :: * -> *)
   = CmdExecuteInvestment
       (InvestmentRequest v) -- ^ The investment request
   deriving (Eq, Show)
@@ -410,23 +434,15 @@ executeValidInvestment
   -> Command n (MelonT m) ModelState
 executeValidInvestment input =
   let
+    owner = input^.miVersion.vdOwner
     fund = input^.miFund.fdAddress
     cost :: ModelState v -> InvestmentRequest v -> UIntN 256
-    cost s investment =
-      let
-        quoteDecimals = s^.msDecimals
+    cost s investment = s^.msShareCost share asset decimals
+      where
+        share = investment^.irShare
         asset = investment^.irAsset
-        assetDecimals = fromMaybe 0 $ input^?miVersion.vdAssets.ix asset.asDecimals
-        shareQuantity = investment^.irShare
-        sharePrice = s^.msSharePrice
-        -- Share cost in quote asset
-        shareQuoteCost = (shareQuantity * sharePrice)
-          `div` (10^quoteDecimals)
-        -- Share cost in investment asset
-        shareAssetCost = shareQuoteCost * (s^.msAssetPrice asset)
-          `div` (10^assetDecimals)
-      in
-      shareAssetCost
+        decimals = fromMaybe 0 $
+          input^?miVersion.vdAssets.ix asset.asDecimals.to fromIntegral
     isValidInvestment s investment =
       (cost s investment <= (investment^.irGive))
       &&
@@ -444,25 +460,63 @@ executeValidInvestment input =
               CmdExecuteInvestment <$> Gen.element is
     execute (CmdExecuteInvestment req) = do
       defaultCall <- getCall
-      let investorCallFund = defaultCall
-            { callFrom = Just (req^.irInvestor)
-            , callTo = Just fund
-            }
+      let asset = req^.irAsset
+          investor = req^.irInvestor
+          give = req^.irGive
+          callAsset = defaultCall { callTo = Just asset }
+          callFund = defaultCall { callTo = Just fund }
+          ownerCallAsset = callAsset { callFrom = Just owner }
+          investorCallAsset = callAsset { callFrom = Just investor }
+          investorCallFund = callFund { callFrom = Just investor }
+      annotate $ "Investment asset: " ++ show asset
+      -- Owner transfers the required amount to the investor.
+      evalM $ liftWeb3 $
+        Asset.transfer ownerCallAsset investor give
+        >>= getTransactionEvents >>= \case
+          [Asset.Transfer {}] -> pure ()
+          _ -> fail "Failed to transfer give amount to investor."
+      -- Investor allows transfer to fund.
+      evalM $ liftWeb3 $
+        Asset.approve investorCallAsset fund give
+        >>= getTransactionEvents >>= \case
+          [Asset.Approval {}] -> pure ()
+          _ -> fail "Failed to approve give amount for fund."
+      do
+        balance <- evalM $ liftWeb3 $ Asset.balanceOf callAsset fund
+        annotate $ "Fund balance before: " ++ show balance
+        totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
+        annotate $ "Total supply before: " ++ show totalSupply
+        investorBalance <- evalM $ liftWeb3 $ Fund.balanceOf callFund investor
+        annotate $ "Investor balance before: " ++ show investorBalance
       tx <- evalM $ liftWeb3 $
         Fund.executeRequest investorCallFund (req^.irId.to concrete)
+      do
+        balance <- evalM $ liftWeb3 $ Asset.balanceOf callAsset fund
+        annotate $ "Fund balance after: " ++ show balance
+        totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
+        annotate $ "Total supply after: " ++ show totalSupply
+        investorBalance <- evalM $ liftWeb3 $ Fund.balanceOf callFund investor
+        annotate $ "Investor balance after: " ++ show investorBalance
       evalM $ liftWeb3 $
         getTransactionEvents tx >>= \case
           [Asset.Transfer {}] -> pure ()
           _ -> fail "Failed to transfer assets on investment."
-      -- XXX: Check for Shares.Created events
+      -- XXX: Created events are not always fired,
+      --   even if the shares are created.
+      -- evalM $ liftWeb3 $
+      --   getTransactionEvents tx >>= \case
+      --     [Fund.Created {}] -> pure ()
+      --     _ -> fail "Failed to create shares on investment."
   in
   Command gen execute
     [ Require $ \s _ -> not $ s^.msIsShutdown
     , Require $ \s (CmdExecuteInvestment req) -> isValidInvestment s req
-    , Update $ \s (CmdExecuteInvestment req) _ ->
+    , Update $ \s (CmdExecuteInvestment req) _ -> s
+        & msInvestments %~ filter (\req' -> req'^.irId /= req^.irId)
+        & msAssetBalances.at (req^.irAsset).non 0 %~ (+ (cost s req))
+        & msTotalShares %~ (+ (req^.irShare))
+        -- XXX: Keep per investor share balance.
         -- XXX: This executes calcSharePriceAndAllocateFees.
-        -- XXX: This modifies the total shares and asset holdings.
-        s & msInvestments %~ filter (\req' -> req'^.irId /= req^.irId)
     ]
 
 
@@ -470,14 +524,13 @@ executeValidInvestment input =
 -- Price Feed
 
 -- | Update the price feed
-data CmdUpdatePriceFeed (v :: * -> *)
+newtype CmdUpdatePriceFeed (v :: * -> *)
   = CmdUpdatePriceFeed
       (HashMap Address (UIntN 256)) -- ^ The list of new prices.
-      [HashMap Address (UIntN 256)] -- ^ The remaining price feed.
   deriving (Eq, Show)
 instance HTraversable CmdUpdatePriceFeed where
-  htraverse _ (CmdUpdatePriceFeed prices priceFeed) = pure $
-    CmdUpdatePriceFeed prices priceFeed
+  htraverse _ (CmdUpdatePriceFeed prices) = pure $
+    CmdUpdatePriceFeed prices
 
 cmdUpdatePriceFeed
   :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
@@ -486,25 +539,38 @@ cmdUpdatePriceFeed
 cmdUpdatePriceFeed input =
   let
     updatePriceFeed = PriceFeed.updatePriceFeed (input^.miVersion)
+    canonicalPriceFeed = input^.miVersion.vdCanonicalPriceFeed
 
     gen s
       | s^.msIsShutdown = Nothing
-      | otherwise = case s^.msPriceFeed.to uncons of
-          Nothing -> Nothing
-          Just (ps, pss) -> Just $ pure $ CmdUpdatePriceFeed ps pss
-    execute (CmdUpdatePriceFeed prices _) =
+      | otherwise = Just $ pure $
+          CmdUpdatePriceFeed $ head (s^.msPriceFeed)
+    execute (CmdUpdatePriceFeed prices) = do
       updatePriceFeed prices
+      defaultCall <- getCall
+      let callFeed = defaultCall { callTo = Just canonicalPriceFeed }
+          assets = input^.miVersion.vdAssets.to HashMap.keys
+      evalM $ liftWeb3 $ CanonicalPriceFeed.getPrices callFeed assets
   in
   Command gen execute
     [ Require $ \s _ -> not $ s^.msIsShutdown
-    , Update $ \s (CmdUpdatePriceFeed _ priceFeed) _ -> s
-        & msPriceFeed .~ priceFeed
+    , Update $ \s (CmdUpdatePriceFeed prices) _ -> s
+        & msPrices .~ prices
+        & msPriceFeed %~ tail
         & msPriceUpdateId %~ succ
+    , Ensure $ \_ _ (CmdUpdatePriceFeed prices) (prices', _) ->
+        prices' === HashMap.elems prices
     ]
 
 
 ------------------------------------------------------------
 -- Share Price
+
+data CalcSharePrice (v :: * -> *)
+  = CalcSharePrice
+  deriving (Eq, Show)
+instance HTraversable CalcSharePrice where
+  htraverse _ _ = pure CalcSharePrice
 
 -- | Tests share-price invariant
 --
@@ -519,6 +585,56 @@ checkSharePrice
   => ModelInput
   -> Command n (MelonT m) ModelState
 checkSharePrice input =
+  let
+    fund = input^.miFund.fdAddress
+
+    gen _ = Just $ pure CalcSharePrice
+    execute CalcSharePrice = do
+      defaultCall <- getCall
+      let callFund = defaultCall { callTo = Just fund }
+      do
+        let assets = input^.miVersion.vdAssets.to HashMap.keys
+        (prices, _) <- evalM $ liftWeb3 $
+          CanonicalPriceFeed.getPrices defaultCall
+            { callTo = Just (input^.miVersion.vdCanonicalPriceFeed) }
+            assets
+        annotate $ "Asset prices: " ++ show (HashMap.fromList (zip assets prices))
+        invertedPriceInfos <- evalM $ liftWeb3 $
+          iforM (input^.miVersion.vdAssets) $ \asset _ -> do
+            let callPriceFeed = defaultCall { callTo = Just $ input^.miVersion.vdCanonicalPriceFeed }
+            CanonicalPriceFeed.getInvertedPriceInfo callPriceFeed asset
+        annotate $ "Inverted price info: " ++ show invertedPriceInfos
+        balances <- evalM $ liftWeb3 $
+          iforM (input^.miVersion.vdAssets) $ \asset _ -> do
+            Asset.balanceOf defaultCall { callTo = Just asset } fund
+        annotate $ "Fund's asset balances: " ++ show balances
+        totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
+        annotate $ "Total supply: " ++ show totalSupply
+      evalM $ liftWeb3 $ Fund.calcSharePrice callFund
+  in
+  Command gen execute
+    [ Ensure $ \s _ _ sharePrice -> do
+        annotateShow $ s^.msPrices
+        annotateShow $ s^.msInvertedPrices
+        annotateShow $ s^.msAssetBalances
+        annotateShow $ s^.msTotalShares
+        let truncate' = truncateTo 8 (s^.msQuoteDecimals)
+        truncate' sharePrice === truncate' (s^.msSharePrice)
+    ]
+
+-- | Tests share-price invariant
+--
+-- Invariant of Sum of asset balances times their price (according to price
+-- feed) a fund holds divided by the amount of total shares in existence of
+-- this fund (= totalSupply) is equal to its sharePrice:
+-- @
+--   SumForAllAssets(assetBalance * assetPrice) / totalShares == sharePrice
+-- @
+checkSharePriceOld
+  :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
+  => ModelInput
+  -> Command n (MelonT m) ModelState
+checkSharePriceOld input =
   let
     updatePriceFeed = PriceFeed.updatePriceFeed (input^.miVersion)
     fund = input^.miFund.fdAddress
@@ -719,9 +835,9 @@ checkMakeOrderSharePrice input =
 
 data CheckMakeOrderSharePrice (v :: * -> *)
   = CheckMakeOrderSharePrice
-      (UIntN 256)  -- ^ Exchange index
-      (UIntN 256)  -- ^ Sell quantity
-      (UIntN 256)  -- ^ Get quantity
+      !(UIntN 256)  -- ^ Exchange index
+      !(UIntN 256)  -- ^ Sell quantity
+      !(UIntN 256)  -- ^ Get quantity
   deriving (Eq, Show)
 instance HTraversable CheckMakeOrderSharePrice where
   htraverse _ (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity)
@@ -815,10 +931,10 @@ checkRequestInvestment input =
 
 data CheckRequestInvestment (v :: * -> *)
   = CheckRequestInvestment
-      Address -- ^ Investor
-      Address -- ^ Trade token
-      (UIntN 256) -- ^ Give quantity
-      (UIntN 256) -- ^ Share quantity
+      !Address -- ^ Investor
+      !Address -- ^ Trade token
+      !(UIntN 256) -- ^ Give quantity
+      !(UIntN 256) -- ^ Share quantity
   deriving (Eq, Show)
 instance HTraversable CheckRequestInvestment where
   htraverse _ (CheckRequestInvestment investor token give share)
