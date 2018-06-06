@@ -244,7 +244,7 @@ managerCanShutdownFund input =
             , callTo = Just version
             }
           callFund = defaultCall { callTo = Just fund }
-      annotateShow $ encodeCall $ Fund.ShutDownData
+      annotateShow $ encodeCall Fund.ShutDownData
       void $ evalM $ liftWeb3 $ Version.shutDownFund managerCallVersion fund
       evalM $ liftWeb3 $ Fund.isShutDown callFund
   in
