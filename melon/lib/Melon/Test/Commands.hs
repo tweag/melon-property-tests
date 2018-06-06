@@ -487,12 +487,13 @@ executeValidInvestment input =
           ownerCallAsset = callAsset { callFrom = Just owner }
           investorCallAsset = callAsset { callFrom = Just investor }
           investorCallFund = callFund { callFrom = Just investor }
-      annotate $ "Investment:\n"
-        ++ "  investor: " ++ show (req^.irInvestor) ++ "\n"
-        ++ "  asset: " ++ show (req^.irAsset) ++ "\n"
-        ++ "  give: " ++ show (req^.irGive) ++ "\n"
-        ++ "  share: " ++ show (req^.irShare) ++ "\n"
-        ++ "  price-update: " ++ show (req^.irPriceUpdateId) ++ "\n"
+      -- Useful annotation for debugging
+      -- annotate $ "Investment:\n"
+      --   ++ "  investor: " ++ show (req^.irInvestor) ++ "\n"
+      --   ++ "  asset: " ++ show (req^.irAsset) ++ "\n"
+      --   ++ "  give: " ++ show (req^.irGive) ++ "\n"
+      --   ++ "  share: " ++ show (req^.irShare) ++ "\n"
+      --   ++ "  price-update: " ++ show (req^.irPriceUpdateId) ++ "\n"
       -- Owner transfers the required amount to the investor.
       evalM $ liftWeb3 $
         Asset.transfer ownerCallAsset investor give
@@ -505,22 +506,24 @@ executeValidInvestment input =
         >>= getTransactionEvents >>= \case
           [Asset.Approval {}] -> pure ()
           _ -> fail "Failed to approve give amount for fund."
-      do
-        balance <- evalM $ liftWeb3 $ Asset.balanceOf callAsset fund
-        annotate $ "Fund balance before: " ++ show balance
-        totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
-        annotate $ "Total supply before: " ++ show totalSupply
-        investorBalance <- evalM $ liftWeb3 $ Fund.balanceOf callFund investor
-        annotate $ "Investor balance before: " ++ show investorBalance
+      -- Useful annotation for debugging
+      -- do
+      --   balance <- evalM $ liftWeb3 $ Asset.balanceOf callAsset fund
+      --   annotate $ "Fund balance before: " ++ show balance
+      --   totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
+      --   annotate $ "Total supply before: " ++ show totalSupply
+      --   investorBalance <- evalM $ liftWeb3 $ Fund.balanceOf callFund investor
+      --   annotate $ "Investor balance before: " ++ show investorBalance
       tx <- evalM $ liftWeb3 $
         Fund.executeRequest investorCallFund (req^.irId.to concrete)
-      do
-        balance <- evalM $ liftWeb3 $ Asset.balanceOf callAsset fund
-        annotate $ "Fund balance after: " ++ show balance
-        totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
-        annotate $ "Total supply after: " ++ show totalSupply
-        investorBalance <- evalM $ liftWeb3 $ Fund.balanceOf callFund investor
-        annotate $ "Investor balance after: " ++ show investorBalance
+      -- Useful annotation for debugging
+      -- do
+      --   balance <- evalM $ liftWeb3 $ Asset.balanceOf callAsset fund
+      --   annotate $ "Fund balance after: " ++ show balance
+      --   totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
+      --   annotate $ "Total supply after: " ++ show totalSupply
+      --   investorBalance <- evalM $ liftWeb3 $ Fund.balanceOf callFund investor
+      --   annotate $ "Investor balance after: " ++ show investorBalance
       evalM $ liftWeb3 $
         getTransactionEvents tx >>= \case
           [Asset.Transfer {}] -> pure ()
@@ -616,32 +619,38 @@ checkSharePrice input =
     execute CalcSharePrice = do
       defaultCall <- getCall
       let callFund = defaultCall { callTo = Just fund }
-      do
-        let assets = input^.miVersion.vdAssets.to HashMap.keys
-        (prices, _) <- evalM $ liftWeb3 $
-          CanonicalPriceFeed.getPrices defaultCall
-            { callTo = Just (input^.miVersion.vdCanonicalPriceFeed) }
-            assets
-        annotate $ "Asset prices: " ++ show (HashMap.fromList (zip assets prices))
-        invertedPriceInfos <- evalM $ liftWeb3 $
-          iforM (input^.miVersion.vdAssets) $ \asset _ -> do
-            let callPriceFeed = defaultCall { callTo = Just $ input^.miVersion.vdCanonicalPriceFeed }
-            CanonicalPriceFeed.getInvertedPriceInfo callPriceFeed asset
-        annotate $ "Inverted price info: " ++ show invertedPriceInfos
-        balances <- evalM $ liftWeb3 $
-          iforM (input^.miVersion.vdAssets) $ \asset _ -> do
-            Asset.balanceOf defaultCall { callTo = Just asset } fund
-        annotate $ "Fund's asset balances: " ++ show balances
-        totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
-        annotate $ "Total supply: " ++ show totalSupply
+      -- Useful annotation for debugging
+      -- do
+      --   let assets = input^.miVersion.vdAssets.to HashMap.keys
+      --   (prices, _) <- evalM $ liftWeb3 $
+      --     CanonicalPriceFeed.getPrices defaultCall
+      --       { callTo = Just (input^.miVersion.vdCanonicalPriceFeed) }
+      --       assets
+      --   annotate $ "Asset prices: " ++ show (HashMap.fromList (zip assets prices))
+      --   invertedPriceInfos <- evalM $ liftWeb3 $
+      --     iforM (input^.miVersion.vdAssets) $ \asset _ -> do
+      --       let callPriceFeed = defaultCall { callTo = Just $ input^.miVersion.vdCanonicalPriceFeed }
+      --       CanonicalPriceFeed.getInvertedPriceInfo callPriceFeed asset
+      --   annotate $ "Inverted price info: " ++ show invertedPriceInfos
+      --   balances <- evalM $ liftWeb3 $
+      --     iforM (input^.miVersion.vdAssets) $ \asset _ -> do
+      --       Asset.balanceOf defaultCall { callTo = Just asset } fund
+      --   annotate $ "Fund's asset balances: " ++ show balances
+      --   totalSupply <- evalM $ liftWeb3 $ Fund.totalSupply callFund
+      --   annotate $ "Total supply: " ++ show totalSupply
       evalM $ liftWeb3 $ Fund.calcSharePrice callFund
   in
   Command gen execute
     [ Ensure $ \s _ _ sharePrice -> do
-        annotateShow $ s^.msPrices
-        annotateShow $ s^.msInvertedPrices
-        annotateShow $ s^.msAssetBalances
-        annotateShow $ s^.msTotalShares
+        annotate $ "Asset prices:\n" ++ unlines
+          [ "  " ++ show asset ++ ": " ++ show price
+          | (asset, price) <- s^.msPrices.to HashMap.toList ]
+        annotate $ "Asset balances:\n" ++ unlines
+          [ "  " ++ show asset ++ ": " ++ show balance
+          | (asset, balance) <- s^.msAssetBalances.to HashMap.toList ]
+        annotate $ "Total shares: " ++ show (s^.msTotalShares)
+        annotate $ "Expected share price: " ++ show (s^.msSharePrice)
+        annotate $ "Actual share price: " ++ show sharePrice
         let truncate' = truncateTo 8 (s^.msQuoteDecimals)
         truncate' sharePrice === truncate' (s^.msSharePrice)
     ]
