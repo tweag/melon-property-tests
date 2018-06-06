@@ -83,7 +83,10 @@ prop_melonport numTests numCommands httpManager web3Provider =
   fund <- Fund.deploy version manager managementFee performanceFee
 
   -- Enable investment and redemption
-  -- XXX: Move this into tests and make it part of the model.
+  -- XXX:
+  --   For now we just enable investment/redemeption of all assets.
+  --   This should be captured by the model state and enabling/disabling
+  --   investment/redemption should be made into commands.
   defaultCall <- getCall
   let managerCallFund = defaultCall
         { callFrom = Just $ fund^.fdManager
@@ -142,6 +145,7 @@ prop_melonport numTests numCommands httpManager web3Provider =
     Gen.sequential (Range.linear 1 numCommands) initialModelState
       [ checkIsFundShutdown input
       , managerCanShutdownFund input
+      , requestAffordableInvestment input
       , checkSharePrice input
       , checkFeeAllocation input
       , checkMakeOrderSharePrice input
@@ -286,6 +290,99 @@ managerCanShutdownFund input =
 --     [ Require $ \s _ -> not $ s^.msIsShutdown
 --     , Ensure $ \_ _ _ o -> o === False
 --     ]
+
+
+------------------------------------------------------------
+-- Investment
+
+-- | An investment request command.
+data CmdRequestInvestment (v :: * -> *)
+  = CmdRequestInvestment
+      Address -- ^ Investor
+      Address -- ^ Asset
+      (UIntN 256) -- ^ Give amount
+      (UIntN 256) -- ^ Share amount
+  deriving (Eq, Show)
+instance HTraversable CmdRequestInvestment where
+  htraverse _ (CmdRequestInvestment investor asset give share)
+    = pure $ CmdRequestInvestment investor asset give share
+
+-- | Request an affordable investment.
+--
+-- Choose an existing investor and asset and request an investment for
+-- arbitrary give and share amounts. The give amount will be transferred to
+-- the investor and approved for fund investment so that the investor can
+-- afford the investment.
+--
+-- XXX: This test-case assumes that investment is always allowed.
+--   Currently, investment requests will always be allowed as long as
+--   investment in the particular asset is allowed. This will change once
+--   compliance is implemented.
+requestAffordableInvestment
+  :: (Monad n, MonadGen n, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
+  => ModelInput m
+  -> Command n (MelonT m) ModelState
+requestAffordableInvestment input =
+  let
+    owner = input^.miVersion.vdOwner
+    fund = input^.miFund.fdAddress
+
+    gen s
+      | s^.msIsShutdown = Nothing
+      | otherwise = Just $ do
+          investor <- Gen.element (input^.miInvestors)
+          asset <- Gen.element (input^.miVersion.vdAssets.to HashMap.keys)
+          -- The premined assets hold 10^28 in supply. Here we stay well below
+          -- that amount and assume that the supply is endless.
+          give <- Gen.integral (Range.linear 0 (10^(24::Int)))
+          share <- Gen.integral (Range.linear 0 (10^(24::Int)))
+          pure $ CmdRequestInvestment investor asset give share
+    execute (CmdRequestInvestment investor asset give share) = do
+      defaultCall <- getCall
+      let ownerCallAsset = defaultCall
+            { callFrom = Just owner
+            , callTo = Just asset
+            }
+          investorCallAsset = defaultCall
+            { callFrom = Just investor
+            , callTo = Just asset
+            }
+          investorCallFund = defaultCall
+            { callFrom = Just investor
+            , callTo = Just fund
+            }
+      -- Owner transfers the required amount to the investor.
+      evalM $ liftWeb3 $
+        Asset.transfer ownerCallAsset investor give
+        >>= getTransactionEvents >>= \case
+          [Asset.Transfer {}] -> pure ()
+          _ -> fail "Failed to transfer give amount to investor."
+      -- Investor allows transfer to fund.
+      evalM $ liftWeb3 $
+        Asset.approve investorCallAsset fund give
+        >>= getTransactionEvents >>= \case
+          [Asset.Approval {}] -> pure ()
+          _ -> fail "Failed to approve give amount for fund."
+      -- Request the investment.
+      evalM $ liftWeb3 $
+        Fund.requestInvestment investorCallFund give share asset
+        >>= getTransactionEvents >>= \case
+          [Fund.RequestUpdated  reqId] -> pure reqId
+          _ -> fail "Failed to request investment."
+  in
+  Command gen execute
+    [ Require $ \s _ -> not $ s^.msIsShutdown
+    , Update $ \s (CmdRequestInvestment investor asset give share) o ->
+        let request = InvestmentRequest
+              { _irId = o
+              , _irInvestor = investor
+              , _irAsset = asset
+              , _irGive = give
+              , _irShare = share
+              }
+        in
+        s & msInvestments %~ (request:)
+    ]
 
 
 ------------------------------------------------------------
