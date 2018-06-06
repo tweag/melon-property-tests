@@ -52,7 +52,16 @@ tests = do
     [ ("prop_melonport", prop_melonport 20 200 manager provider) ]
 
 
---  > recheck (Size 8) (Seed 9082926469563838346 (-5629536107532025561)) <property>
+-- | Recheck a particular test-case.
+--
+-- If a test-case fails and the message says some thing along the lines of
+--
+--    > recheck (Size 8) (Seed 9082926469563838346 (-5629536107532025561)) prop_melonport
+--
+-- Then you can perform that re-check by executing
+--
+--     recheck_prop_melonport (Size 8) (Seed 908... (-562...))
+--
 recheck_prop_melonport :: Size -> Seed -> IO ()
 recheck_prop_melonport size seed = do
   manager <- newManager defaultManagerSettings
