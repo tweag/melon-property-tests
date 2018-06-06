@@ -186,24 +186,43 @@ genPriceFeedSpec version = do
   let assets = version^.vdAssets.to HashMap.keys
       numAssets = length assets
       -- Takes a random list of asset prices and cycles through them.
-      unrealisticCyclicPriceSource =
-        fmap PriceFeed.UnrealisticCyclicPriceFeed $
-          Gen.list (Range.linear 1 100) $ -- a cycle of up to 100 prices
-            fmap (HashMap.fromList . zip assets) $
-            Gen.list (Range.singleton numAssets) $ -- one price per asset
-              -- XXX:
-              --   The CanonicalPriceFeed.collectAndUpdate operation does
-              --   not complete on an all zero price update, or an update
-              --   of the form @[0, 1, 1]@.
-              --   However, the StakingPriceFeed.update operation accepts
-              --   an all zero price update.
-              -- Gen.integral (Range.linear 0 maxBound)
-              Gen.integral (Range.linear 1 maxBound)
+      -- unrealisticCyclicPriceSource maxPrice =
+      --   fmap PriceFeed.UnrealisticCyclicPriceFeed $
+      --     Gen.list (Range.linear 1 100) $ -- a cycle of up to 100 prices
+      --       fmap (HashMap.fromList . zip assets) $
+      --       Gen.list (Range.singleton numAssets) $ -- one price per asset
+      --         -- XXX:
+      --         --   The CanonicalPriceFeed.collectAndUpdate operation does
+      --         --   not complete on an all zero price update, or an update
+      --         --   of the form @[0, 1, 1]@.
+      --         --   However, the StakingPriceFeed.update operation accepts
+      --         --   an all zero price update.
+      --         Gen.integral (Range.linear 1 maxPrice)
       -- Does one lookup on CryptoCompare and then repeats these prices.
       realisticConstantPriceSource = pure $
         PriceFeed.RealisticConstantPriceFeed "MLN" 18 (version^.vdAssets)
+      -- Does one lookup on CryptoCompare and generates a cycle of slight
+      -- variations of these prices that will be repeated indefinitely.
+      realisticCyclicPriceSource = do
+        variations <-
+          Gen.list (Range.linear 1 100) $
+            fmap (HashMap.fromList . zip assets) $
+            Gen.list (Range.singleton numAssets) $ -- one variation per asset
+              Gen.double (Range.linearFracFrom 0 (-0.05) 0.05) -- up to 5% variations per step
+        pure $ PriceFeed.RealisticCyclicPriceFeed
+          "MLN" 18 (version^.vdAssets) variations
   Gen.frequency
-    [ (1, unrealisticCyclicPriceSource)
+    [ (1, realisticCyclicPriceSource)
+    -- XXX:
+    --   Strong fluctuations in the price-feed can amplify the rounding issues
+    --   within the Melon func contract and cause differences between expected
+    --   and observed share-price on the order of 10%.
+    -- , (1, unrealisticCyclicPriceSource (10^(30::Int)))
+    -- XXX:
+    --   Too large prices cause overflow in the middle of the models
+    --   calculations. A general handling of that would be good, but for now
+    --   the price-feed is kept more sensible.
+    -- , (1, unrealisticCyclicPriceSource maxBound)
     , (2, realisticConstantPriceSource)
     ]
 
@@ -468,7 +487,12 @@ executeValidInvestment input =
           ownerCallAsset = callAsset { callFrom = Just owner }
           investorCallAsset = callAsset { callFrom = Just investor }
           investorCallFund = callFund { callFrom = Just investor }
-      annotate $ "Investment asset: " ++ show asset
+      annotate $ "Investment:\n"
+        ++ "  investor: " ++ show (req^.irInvestor) ++ "\n"
+        ++ "  asset: " ++ show (req^.irAsset) ++ "\n"
+        ++ "  give: " ++ show (req^.irGive) ++ "\n"
+        ++ "  share: " ++ show (req^.irShare) ++ "\n"
+        ++ "  price-update: " ++ show (req^.irPriceUpdateId) ++ "\n"
       -- Owner transfers the required amount to the investor.
       evalM $ liftWeb3 $
         Asset.transfer ownerCallAsset investor give

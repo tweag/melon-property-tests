@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -219,6 +220,12 @@ data PriceFeedSpec
       T.Text -- ^ Quote asset name on CryptoCompare
       Integer -- ^ Quote asset decimals
       (HashMap Address AssetSpec) -- ^ Known assets
+    -- | Repeating cycle of small variations
+  | RealisticCyclicPriceFeed
+      T.Text -- ^ Quote asset name on CryptoCompare
+      Integer -- ^ Quote asset decimals
+      (HashMap Address AssetSpec) -- ^ Known assets
+      [HashMap Address Double] -- ^ Cycle of variations
     -- | Ever repeating cycle of unrealistic prices
   | UnrealisticCyclicPriceFeed [HashMap Address (UIntN 256)]
   deriving (Eq, Ord, Show)
@@ -229,8 +236,17 @@ createPriceFeed = \case
   RealisticConstantPriceFeed quoteName quoteDecimals tokens -> do
     prices <- getConvertedPrices quoteName quoteDecimals tokens
     pure $ cycle [prices]
+  RealisticCyclicPriceFeed quoteName quoteDecimals tokens variations -> do
+    prices <- getConvertedPrices quoteName quoteDecimals tokens
+    pure $ scanl vary prices (cycle variations)
   UnrealisticCyclicPriceFeed priceCycle ->
     pure $ cycle priceCycle
+  where
+    vary prices variations = imap varyAssetPrice prices
+      where
+        varyAssetPrice asset price =
+          let variation = variations^.at asset.non 0 in
+          price + round (fromIntegral price * variation)
 
 
 -- | Dummy price-feed update that just returns constants.
