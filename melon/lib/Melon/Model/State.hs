@@ -25,6 +25,10 @@ data ModelState (v :: * -> *) = ModelState
     -- ^ Whether the fund contract is shut-down.
   , _msInvestments :: [InvestmentRequest v]
     -- ^ Open investment requests.
+    --
+    -- Note, that the actual fund might hold more open requests than the model.
+    -- If a request operation is shrunk away, then the model will lose that
+    -- request, but the request won't be undone on the fund.
   } deriving (Eq, Ord, Show)
 
 
