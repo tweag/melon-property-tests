@@ -13,15 +13,20 @@ import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
 
 
-initialModelState :: ModelState v
-initialModelState = ModelState
-  { _msIsShutdown = False
-  , _msInvestments = mempty
-  }
-
-
 data ModelState (v :: * -> *) = ModelState
-  { _msIsShutdown :: !Bool
+  { _msPriceUpdateId :: UIntN 256
+    -- ^ Price-feed update Id. (Incremented at every update.)
+    -- Investment execution requires that two updates happened since the
+    -- request.
+    --
+    -- Note, the model's update Id and the fund's update Id won't necessarily
+    -- match. If the shrinking procedure removes price-feed updates, then the
+    -- model will be affected, but the fund will not.
+  , _msPrices :: [UIntN 256]
+    -- ^ Current asset prices as of latest price-feed update.
+  , _msPriceFeed :: [[UIntN 256]]
+    -- ^ Infinite list of prices for price-feed update.
+  , _msIsShutdown :: !Bool
     -- ^ Whether the fund contract is shut-down.
   , _msInvestments :: [InvestmentRequest v]
     -- ^ Open investment requests.

@@ -15,16 +15,13 @@ import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Bytes (BytesN)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
 
-import Melon.Context (MelonT)
 
 
-data ModelInput m = ModelInput
+data ModelInput = ModelInput
   { _miVersion :: VersionDeployment
     -- ^ The version deployment.
   , _miFund :: FundDeployment
     -- ^ The fund deployment.
-  , _miUpdatePriceFeed :: MelonT m ()
-    -- ^ The action to update the price feed.
   , _miInvestors :: [Address]
     -- ^ Available fund investors.
   } deriving Generic

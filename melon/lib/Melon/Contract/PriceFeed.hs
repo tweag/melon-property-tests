@@ -7,17 +7,13 @@ module Melon.Contract.PriceFeed
   ( deploy
   , deployCanonicalPriceFeed
   , deployStakingPriceFeed
-  , updateCanonicalPriceFeed
-  , makeConstantConvertedPrices
-  , PriceSource
-  , PriceSourceSpec (..)
-  , instantiatePriceSource
+  , updatePriceFeed
+  , PriceFeedSpec (..)
+  , createPriceFeed
   ) where
 
-import Control.Concurrent.MVar (modifyMVar, newMVar)
 import Control.Exception.Safe (Exception (..), throw)
 import Control.Lens
-import Control.Monad.IO.Class (liftIO)
 import Data.Aeson.Lens
 import qualified Data.HashMap.Strict as HashMap
 import Data.Semigroup ((<>))
@@ -36,6 +32,7 @@ import qualified Melon.ABI.Assets.Asset as Asset
 import qualified Melon.ABI.PriceFeeds.CanonicalPriceFeed as CanonicalPriceFeed
 import qualified Melon.ABI.PriceFeeds.StakingPriceFeed as StakingPriceFeed
 import qualified Melon.ABI.System.OperatorStaking as OperatorStaking
+import Melon.Model.Input
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth
 
 
@@ -103,9 +100,12 @@ deployCanonicalPriceFeed owner mlnToken governance = do
     -- Real-time requirements such as "update every 60 s" are difficult to
     -- combine with the property based state-machine testing used in this
     -- project.  Currently, these requirements are ignored by configuring a
-    -- very long update time and validity time. However, the tests do perform
-    -- price-feed updates. So, that aspect is not untested.
-    [oneYearInSeconds `div` 2, oneYearInSeconds]
+    -- zero interval and very long validity time. The interval defines how much
+    -- time needs to have passed between investment request and execution, and
+    -- the validity time defines how long a price-feed update is considered
+    -- valid. The tests do perform price-feed updates. So, that aspect is not
+    -- untested.
+    [0, oneYearInSeconds]
     [1000000, 4] -- staking-info: minStake, numOperators
     governance -- address of Governance
   liftWeb3 $ getContractAddress tx
@@ -138,26 +138,20 @@ mockBytes = "0x86b5eed81db5f691c36cc83eb58cb5205bd2090bf3763a19f0c5bf2f074dd84b"
 mockAddress :: Address
 mockAddress = "0x083c41ea13af6c2d5aaddf6e73142eb9a7b00183"
 
--- | A price source
---
--- Takes @quoteName quoteDecimals tokens@(name, decimals)@
--- and returns the list of prices.
-type PriceSource = IO [UIntN 256]
-
 -- | Fetch current prices from the given source and update the price-feed.
-updateCanonicalPriceFeed
+updatePriceFeed
   :: MonadMelon m
-  => PriceSource
-  -> Address -- ^ CanonicalPriceFeed contract address
-  -> Address -- ^ StakingPriceFeed contract address
-  -> Address -- ^ Contract owner address
-  -> [Address] -- ^ List of token addresses
+  => VersionDeployment -- ^ Version contract deployment
+  -> [UIntN 256] -- ^ The new asset prices
   -> m ()
-updateCanonicalPriceFeed source canonical staking owner assets = do
-
-  prices <- liftIO source
-
+updatePriceFeed version prices = do
   defaultCall <- getCall
+  let canonical = version^.vdCanonicalPriceFeed
+      staking = version^.vdStakingPriceFeed
+      owner = version^.vdOwner
+      assets = version^.vdAssets.to HashMap.keys
+
+  -- Update staking price feed
   let ownerCallStaking = defaultCall
         { callFrom = Just owner
         , callTo = Just staking
@@ -170,6 +164,7 @@ updateCanonicalPriceFeed source canonical staking owner assets = do
       _ -> throw $ ExpectedOnePriceUpdateEvent
         "At StakingPriceFeed.update"
 
+  -- Update canonical price feed
   let ownerCallCanonical = defaultCall
         { callFrom = Just owner
         , callTo = Just canonical
@@ -180,7 +175,6 @@ updateCanonicalPriceFeed source canonical staking owner assets = do
       [CanonicalPriceFeed.PriceUpdated _] -> pure ()
       _ -> throw $ ExpectedOnePriceUpdateEvent
         "At CanonicalPriceFeed.collectAndUpdate"
-  pure ()
 
 
 type BigNumber = Decimal P18 RoundHalfUp
@@ -194,7 +188,7 @@ getConvertedPrices
   :: T.Text -- ^ Quote asset name on cryptocompare
   -> Integer -- ^ Quote asset decimals
   -> [(T.Text, Integer)] -- ^ List of tokens (name on cryptocompare, decimals)
-  -> PriceSource -- ^ Returns list of prices (in tokens order)
+  -> IO [UIntN 256] -- ^ Returns list of prices (in tokens order)
 getConvertedPrices quoteName quoteDecimals tokens = do
   priceMap <- do
     let names = map fst tokens
@@ -214,36 +208,24 @@ getConvertedPrices quoteName quoteDecimals tokens = do
   maybe (throw CryptoCompareMissingCurrency) return mbPrices
 
 
--- | Fetches fresh prices from crypto compare
--- and returns a function that will always return these prices.
-makeConstantConvertedPrices
-  :: T.Text -- ^ Quote asset name on cryptocompare
-  -> Integer -- ^ Quote asset decimals
-  -> [(T.Text, Integer)] -- ^ List of tokens (name on cryptocompare, decimals)
-  -> IO PriceSource
-makeConstantConvertedPrices quoteName quoteDecimals tokens = do
-  prices <- getConvertedPrices quoteName quoteDecimals tokens
-  pure $ pure prices
-
-
-data PriceSourceSpec
+data PriceFeedSpec
     -- | Fetches prices from CryptoCompare once, then repeats those prices.
-  = RealisticConstantPriceSource
+  = RealisticConstantPriceFeed
       T.Text -- ^ Quote asset name on CryptoCompare
       Integer -- ^ Quote asset decimals
       [(T.Text, Integer)] -- ^ List of tokens (name on CC, decimals)
     -- | Every repeating cycle of unrealistic prices
-  | UnrealisticCyclicPriceSource [[UIntN 256]]
+  | UnrealisticCyclicPriceFeed [[UIntN 256]]
   deriving (Eq, Ord, Show)
 
 
-instantiatePriceSource :: PriceSourceSpec -> IO PriceSource
-instantiatePriceSource = \case
-  RealisticConstantPriceSource quoteName quoteDecimals tokens ->
-    makeConstantConvertedPrices quoteName quoteDecimals tokens
-  UnrealisticCyclicPriceSource priceCycle -> do
-    mv <- newMVar (cycle priceCycle)
-    pure $ modifyMVar mv $ \(p:ps) -> pure (ps, p)
+createPriceFeed :: PriceFeedSpec -> IO [[UIntN 256]]
+createPriceFeed = \case
+  RealisticConstantPriceFeed quoteName quoteDecimals tokens -> do
+    prices <- getConvertedPrices quoteName quoteDecimals tokens
+    pure $ cycle [prices]
+  UnrealisticCyclicPriceFeed priceCycle ->
+    pure $ cycle priceCycle
 
 
 -- | Dummy price-feed update that just returns constants.
