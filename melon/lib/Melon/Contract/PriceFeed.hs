@@ -15,6 +15,7 @@ module Melon.Contract.PriceFeed
 import Control.Exception.Safe (Exception (..), throw)
 import Control.Lens
 import Data.Aeson.Lens
+import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
 import Data.Semigroup ((<>))
 import qualified Data.Text as T
@@ -142,14 +143,13 @@ mockAddress = "0x083c41ea13af6c2d5aaddf6e73142eb9a7b00183"
 updatePriceFeed
   :: MonadMelon m
   => VersionDeployment -- ^ Version contract deployment
-  -> [UIntN 256] -- ^ The new asset prices
+  -> (HashMap Address (UIntN 256)) -- ^ The new asset prices
   -> m ()
 updatePriceFeed version prices = do
   defaultCall <- getCall
   let canonical = version^.vdCanonicalPriceFeed
       staking = version^.vdStakingPriceFeed
       owner = version^.vdOwner
-      assets = version^.vdAssets.to HashMap.keys
 
   -- Update staking price feed
   let ownerCallStaking = defaultCall
@@ -157,8 +157,8 @@ updatePriceFeed version prices = do
         , callTo = Just staking
         }
   liftWeb3 $ StakingPriceFeed.update ownerCallStaking
-    assets -- list of asset addresses
-    prices -- list of asset prices
+    (HashMap.keys prices) -- list of asset addresses
+    (HashMap.elems prices) -- list of asset prices
     >>= getTransactionEvents >>= \case
       [StakingPriceFeed.PriceUpdated _] -> pure ()
       _ -> throw $ ExpectedOnePriceUpdateEvent
@@ -170,7 +170,7 @@ updatePriceFeed version prices = do
         , callTo = Just canonical
         }
   liftWeb3 $ CanonicalPriceFeed.collectAndUpdate ownerCallCanonical
-    assets -- list of asset addresses
+    (HashMap.keys prices) -- list of asset addresses
     >>= getTransactionEvents >>= \case
       [CanonicalPriceFeed.PriceUpdated _] -> pure ()
       _ -> throw $ ExpectedOnePriceUpdateEvent
@@ -187,24 +187,29 @@ roundTo15 = cast . (cast :: Decimal P18 RoundHalfUp -> Decimal P15 RoundHalfUp)
 getConvertedPrices
   :: T.Text -- ^ Quote asset name on cryptocompare
   -> Integer -- ^ Quote asset decimals
-  -> [(T.Text, Integer)] -- ^ List of tokens (name on cryptocompare, decimals)
-  -> IO [UIntN 256] -- ^ Returns list of prices (in tokens order)
+  -> (HashMap Address AssetSpec) -- ^ Known tokens
+  -> IO (HashMap Address (UIntN 256)) -- ^ Returns asset prices
 getConvertedPrices quoteName quoteDecimals tokens = do
-  priceMap <- do
-    let names = map fst tokens
+  (priceMap :: HashMap T.Text BigNumber) <- do
+    let names :: [T.Text]
+        names = tokens^..traverse.asCryptoCompareName
         tsyms = T.intercalate "," names
         url = "https://min-api.cryptocompare.com/data/price?fsym="
           <> quoteName <> "&tsyms=" <> tsyms <> "&sign=true"
     r <- get (T.unpack url)
     pure $ HashMap.fromList $
       r^@..responseBody.members._Number.to show.to readMaybe._Just
-  let mbPrices = for tokens $ \(name, decimals) ->
-        case HashMap.lookup name priceMap of
+  let mbPrices = for tokens $ \spec ->
+        case priceMap^.at (spec^.asCryptoCompareName) of
           Nothing -> Nothing
           Just (price :: BigNumber) -> Just $
-            let inverse = roundTo15 (1 / price)
+            let decimals :: Integer
+                decimals = spec^.asDecimals
+                inverse :: BigNumber
+                inverse = roundTo15 (1 / price)
+                divided :: BigNumber
                 divided = inverse / (10^^(decimals - quoteDecimals))
-            in truncate $ divided * (10^^decimals)
+            in truncate $ divided * (10^^decimals) :: UIntN 256
   maybe (throw CryptoCompareMissingCurrency) return mbPrices
 
 
@@ -213,13 +218,13 @@ data PriceFeedSpec
   = RealisticConstantPriceFeed
       T.Text -- ^ Quote asset name on CryptoCompare
       Integer -- ^ Quote asset decimals
-      [(T.Text, Integer)] -- ^ List of tokens (name on CC, decimals)
-    -- | Every repeating cycle of unrealistic prices
-  | UnrealisticCyclicPriceFeed [[UIntN 256]]
+      (HashMap Address AssetSpec) -- ^ Known assets
+    -- | Ever repeating cycle of unrealistic prices
+  | UnrealisticCyclicPriceFeed [HashMap Address (UIntN 256)]
   deriving (Eq, Ord, Show)
 
 
-createPriceFeed :: PriceFeedSpec -> IO [[UIntN 256]]
+createPriceFeed :: PriceFeedSpec -> IO [HashMap Address (UIntN 256)]
 createPriceFeed = \case
   RealisticConstantPriceFeed quoteName quoteDecimals tokens -> do
     prices <- getConvertedPrices quoteName quoteDecimals tokens

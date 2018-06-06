@@ -15,7 +15,9 @@ import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Trans.Class
 import Data.ByteArray (convert)
 import qualified Data.ByteString.Char8 as C8
+import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
+import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy (..))
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
@@ -113,9 +115,13 @@ prop_melonport numTests numCommands httpManager web3Provider =
         , _miInvestors = investors
         }
       state = ModelState
-        { _msPriceUpdateId = 1
+        { _msDecimals = fromMaybe 0 $
+            version^?vdAssets.ix (version^.vdMlnToken).asDecimals.to fromIntegral
+        , _msPriceUpdateId = 1
         , _msPrices = prices
         , _msPriceFeed = priceFeed
+        , _msTotalShares = 0
+        , _msAssetBalances = mempty
         , _msIsShutdown = False
         , _msInvestments = []
         }
@@ -149,6 +155,7 @@ prop_melonport numTests numCommands httpManager web3Provider =
       [ checkIsFundShutdown input
       , managerCanShutdownFund input
       , requestAffordableInvestment input
+      , executeValidInvestment input
       , cmdUpdatePriceFeed input
       -- , checkSharePrice input
       -- , checkFeeAllocation input
@@ -162,11 +169,13 @@ prop_melonport numTests numCommands httpManager web3Provider =
 genPriceFeedSpec :: MonadGen m
   => VersionDeployment -> m PriceFeed.PriceFeedSpec
 genPriceFeedSpec version = do
-  let numAssets = HashMap.size (version^.vdAssets)
+  let assets = version^.vdAssets.to HashMap.keys
+      numAssets = length assets
       -- Takes a random list of asset prices and cycles through them.
       unrealisticCyclicPriceSource =
         fmap PriceFeed.UnrealisticCyclicPriceFeed $
           Gen.list (Range.linear 1 100) $ -- a cycle of up to 100 prices
+            fmap (HashMap.fromList . zip assets) $
             Gen.list (Range.singleton numAssets) $ -- one price per asset
               -- XXX:
               --   The CanonicalPriceFeed.collectAndUpdate operation does
@@ -178,10 +187,7 @@ genPriceFeedSpec version = do
               Gen.integral (Range.linear 1 maxBound)
       -- Does one lookup on CryptoCompare and then repeats these prices.
       realisticConstantPriceSource = pure $
-        PriceFeed.RealisticConstantPriceFeed "MLN" 18
-          [ (asset^.asCryptoCompareName, asset^.asDecimals)
-          | asset <- version^.vdAssets.to HashMap.elems
-          ]
+        PriceFeed.RealisticConstantPriceFeed "MLN" 18 (version^.vdAssets)
   Gen.frequency
     [ (1, unrealisticCyclicPriceSource)
     , (2, realisticConstantPriceSource)
@@ -383,9 +389,80 @@ requestAffordableInvestment input =
               , _irAsset = asset
               , _irGive = give
               , _irShare = share
+              , _irPriceUpdateId = s^.msPriceUpdateId
               }
         in
         s & msInvestments %~ (request:)
+    ]
+
+
+data CmdExecuteInvestment (v :: * -> *)
+  = CmdExecuteInvestment
+      (InvestmentRequest v) -- ^ The investment request
+  deriving (Eq, Show)
+instance HTraversable CmdExecuteInvestment where
+  htraverse f (CmdExecuteInvestment req) = CmdExecuteInvestment
+      <$> htraverse f req
+
+executeValidInvestment
+  :: (Monad n, MonadGen n, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
+  => ModelInput
+  -> Command n (MelonT m) ModelState
+executeValidInvestment input =
+  let
+    fund = input^.miFund.fdAddress
+    cost :: ModelState v -> InvestmentRequest v -> UIntN 256
+    cost s investment =
+      let
+        quoteDecimals = s^.msDecimals
+        asset = investment^.irAsset
+        assetDecimals = fromMaybe 0 $ input^?miVersion.vdAssets.ix asset.asDecimals
+        shareQuantity = investment^.irShare
+        sharePrice = s^.msSharePrice
+        -- Share cost in quote asset
+        shareQuoteCost = (shareQuantity * sharePrice)
+          `div` (10^quoteDecimals)
+        -- Share cost in investment asset
+        shareAssetCost = shareQuoteCost * (s^.msAssetPrice asset)
+          `div` (10^assetDecimals)
+      in
+      shareAssetCost
+    isValidInvestment s investment =
+      (cost s investment <= (investment^.irGive))
+      &&
+      ((s^.msPriceUpdateId) >= (investment^.irPriceUpdateId) + 2)
+
+    gen s
+      | s^.msIsShutdown = Nothing
+      | otherwise =
+          let validInvestments = (s^.msInvestments)
+                & filter (isValidInvestment s)
+          in
+          case validInvestments of
+            [] -> Nothing
+            is -> Just $
+              CmdExecuteInvestment <$> Gen.element is
+    execute (CmdExecuteInvestment req) = do
+      defaultCall <- getCall
+      let investorCallFund = defaultCall
+            { callFrom = Just (req^.irInvestor)
+            , callTo = Just fund
+            }
+      tx <- evalM $ liftWeb3 $
+        Fund.executeRequest investorCallFund (req^.irId.to concrete)
+      evalM $ liftWeb3 $
+        getTransactionEvents tx >>= \case
+          [Asset.Transfer {}] -> pure ()
+          _ -> fail "Failed to transfer assets on investment."
+      -- XXX: Check for Shares.Created events
+  in
+  Command gen execute
+    [ Require $ \s _ -> not $ s^.msIsShutdown
+    , Require $ \s (CmdExecuteInvestment req) -> isValidInvestment s req
+    , Update $ \s (CmdExecuteInvestment req) _ ->
+        -- XXX: This executes calcSharePriceAndAllocateFees.
+        -- XXX: This modifies the total shares and asset holdings.
+        s & msInvestments %~ filter (\req' -> req'^.irId /= req^.irId)
     ]
 
 
@@ -395,8 +472,8 @@ requestAffordableInvestment input =
 -- | Update the price feed
 data CmdUpdatePriceFeed (v :: * -> *)
   = CmdUpdatePriceFeed
-      [UIntN 256] -- ^ The list of new prices.
-      [[UIntN 256]] -- ^ The remaining price feed.
+      (HashMap Address (UIntN 256)) -- ^ The list of new prices.
+      [HashMap Address (UIntN 256)] -- ^ The remaining price feed.
   deriving (Eq, Show)
 instance HTraversable CmdUpdatePriceFeed where
   htraverse _ (CmdUpdatePriceFeed prices priceFeed) = pure $

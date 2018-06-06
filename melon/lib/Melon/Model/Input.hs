@@ -82,7 +82,7 @@ data AssetSpec = AssetSpec
     _asCryptoCompareName :: T.Text
   , -- | Asset's number of decimal digits
     _asDecimals :: Integer
-  } deriving (Generic, Show)
+  } deriving (Eq, Generic, Ord, Show)
 
 
 makeClassy ''AssetSpec
