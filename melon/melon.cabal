@@ -44,6 +44,7 @@ library
                        Melon.Contract.Version
                        Melon.Model.Input
                        Melon.Model.State
+                       Melon.Test
                        Melon.Test.Commands
                        Melon.ThirdParty.Network.Ethereum.ABI.Codec
                        Melon.ThirdParty.Network.Ethereum.ABI.Event

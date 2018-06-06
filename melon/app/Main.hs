@@ -4,7 +4,7 @@ module Main
 
 import Control.Monad (void)
 
-import Melon.Test.Commands
+import Melon.Test
 
 
 main :: IO ()
