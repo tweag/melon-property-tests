@@ -2,6 +2,7 @@
 	path = smart-contracts
 	url = https://github.com/melonproject/smart-contracts.git
 	branch = develop
+        ignore = all
 [submodule "hs-web3"]
 	path = hs-web3
 	url = https://github.com/airalab/hs-web3
