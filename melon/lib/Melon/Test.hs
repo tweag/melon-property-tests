@@ -315,6 +315,11 @@ genPriceFeedSpec version = do
       --         --   of the form @[0, 1, 1]@.
       --         --   However, the StakingPriceFeed.update operation accepts
       --         --   an all zero price update.
+      --         --
+      --         --   Replace by the following line to reproduce:
+      --         --
+      --         --     Gen.integral (Range.linear 0 maxPrice)
+      --         --
       --         Gen.integral (Range.linear 1 maxPrice)
       -- Does one lookup on CryptoCompare and then repeats these prices.
       realisticConstantPriceSource = pure $
@@ -335,8 +340,12 @@ genPriceFeedSpec version = do
     -- FAILURE:
     --   Strong fluctuations in the price-feed can amplify the rounding issues
     --   within the Melon func contract and cause differences between expected
-    --   and observed share-price on the order of 10%.
-    -- , (1, unrealisticCyclicPriceSource (10^(30::Int)))
+    --   and observed share-price on the order of 10%. In turn it might also
+    --   cause investments to fail that were expected to succeed.
+    --
+    --   Uncomment to reproduce (also the definition above):
+    --
+    --     , (1, unrealisticCyclicPriceSource (10^(30::Int)))
     --
     -- XXX:
     --   The model needs to be extended to detect uint256 overflow to be able
@@ -356,5 +365,7 @@ genPriceFeedSpec version = do
     --   wrapper where the Num instances converts to common decimal precision
     --   before performing operations and also keeps track of overflows.
     --
-    -- , (1, unrealisticCyclicPriceSource maxBound)
+    --   Uncomment to reproduce (also the definition above):
+    --
+    --     , (1, unrealisticCyclicPriceSource maxBound)
     ]

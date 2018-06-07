@@ -311,17 +311,17 @@ executeValidInvestment input =
       --   ++ "  share: " ++ show (req^.irShare) ++ "\n"
       --   ++ "  price-update: " ++ show (req^.irPriceUpdateId) ++ "\n"
       -- Owner transfers the required amount to the investor.
-      evalM $ liftWeb3 $
+      (evalM $ liftWeb3 $
         Asset.transfer ownerCallAsset investor give
-        >>= getTransactionEvents >>= \case
+        >>= getTransactionEvents) >>= \case
           [Asset.Transfer {}] -> pure ()
-          _ -> fail "Failed to transfer give amount to investor."
+          _ -> annotate "Failed to transfer give amount to investor."
       -- Investor allows transfer to fund.
-      evalM $ liftWeb3 $
+      (evalM $ liftWeb3 $
         Asset.approve investorCallAsset fund give
-        >>= getTransactionEvents >>= \case
+        >>= getTransactionEvents) >>= \case
           [Asset.Approval {}] -> pure ()
-          _ -> fail "Failed to approve give amount for fund."
+          _ -> annotate "Failed to approve give amount for fund."
       -- Useful annotation for debugging
       -- do
       --   balance <- evalM $ liftWeb3 $ Asset.balanceOf callAsset fund
@@ -340,10 +340,10 @@ executeValidInvestment input =
       --   annotate $ "Total supply after: " ++ show totalSupply
       --   investorBalance <- evalM $ liftWeb3 $ Fund.balanceOf callFund investor
       --   annotate $ "Investor balance after: " ++ show investorBalance
-      evalM $ liftWeb3 $
-        getTransactionEvents tx >>= \case
+      (evalM $ liftWeb3 $
+        getTransactionEvents tx) >>= \case
           [Asset.Transfer {}] -> pure ()
-          _ -> fail "Failed to transfer assets on investment."
+          _ -> annotate "Failed to transfer assets on investment."
       -- XXX:
       --   @Created@ events are not always fired, even if the shares are
       --   created.
@@ -697,6 +697,7 @@ checkMakeOrder input =
       --   within the fund contract. A number of operations on the fund use
       --   @calcSharePrice@ or similar internally. Such very large asset prices
       --   could render the fund partially unusable.
+      --   See @melon/lib/Melon/Test.hs@.
       priceBeforeOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
       --------------------------------------------------
@@ -870,9 +871,9 @@ checkRequestInvestment input =
   Command gen execute
     [ Update $ \s _ _ -> s & smsPriceFeed %~ (drop 2)
     , Ensure $ \_prior _after CheckRequestInvestment {}
-      ( _sharesBefore
+      ( _sharesBefore  -- Remove underscores here
       , priceBeforeRequest, priceAfterRequest
-      , _priceBeforeExecute, _priceAfterExecute
+      , _priceBeforeExecute, _priceAfterExecute  -- Remove underscores here
       ) -> do
         priceBeforeRequest === priceAfterRequest
         -- FAILURE:
@@ -884,6 +885,8 @@ checkRequestInvestment input =
         --     │ - 988274706867671691
         --     │ + 987886944818304172
         --
-        -- unless (sharesBefore == 0) $
-        --   priceBeforeExecute === priceAfterExecute
+        --   Uncomment and remove underscores above to reproduce:
+        --
+        --     unless (sharesBefore == 0) $
+        --       priceBeforeExecute === priceAfterExecute
     ]

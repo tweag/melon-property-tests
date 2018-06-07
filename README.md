@@ -120,6 +120,8 @@ ghci> -- Re-check a particular test-case failure in the simple tests.
 ghci> recheck_prop_melonport (Size 8) (Seed 908... (-562...))
 ghci> -- Re-check a particular test-case failure in the model tests.
 ghci> recheck_prop_melonport_model (Size 8) (Seed 908... (-562...))
+ghci> -- Reload if you made changes to the test-cases.
+ghci> :reload
 ```
 
 
@@ -218,4 +220,5 @@ prices in the price-feed.
 
 Failing test-cases or parameters causing test-case failure have been commented
 out and market with `FAILURE`. These can be uncommented one-by-one to observe
-the failure and test if future work on the fund has fixed the issue.
+the failure and test if future work on the fund has fixed the issue. The REPL
+workflow described above might be a good fit in this case.
