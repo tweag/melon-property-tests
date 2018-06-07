@@ -127,8 +127,8 @@ The test-case can be re-checked as follows.
 $ nix-shell --run '
     cd melon;
     cabal new-exec -- \
-      melon-property-tests --limit 100 --commands 500 -- \
-      recheck-simple 9 1362669552689423001 -6519104247039517787
+      melon-property-tests --limit 100 --commands 500 \
+      recheck-simple -- 9 1362669552689423001 -6519104247039517787
     '
 ```
 
