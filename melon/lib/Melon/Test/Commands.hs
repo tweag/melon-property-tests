@@ -650,6 +650,10 @@ checkMakeOrder input =
       --   Indeed this causes the call to SimpleAdapter (index 0) to fail.
       -- XXX: Number of exchanges is hard-coded
       <$> Gen.integral (Range.linear 1 2)
+      -- XXX: Price-feed will fail on operations like @getOrderPriceInfo@
+      --   due to overflow if the sell and get quantities are too large.
+      -- <*> Gen.integral (Range.linear 1 maxBound)
+      -- <*> Gen.integral (Range.linear 1 maxBound)
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
       <*> pure (s^.smsPriceFeed.to head)

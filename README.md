@@ -158,3 +158,64 @@ The `melon` subdirectory contains the following notable items:
 - `lib/Melon/Contract/Version.hs`
     Defines the asset configuration, which assets are available, their name and
     the number of decimals.
+
+
+## Invariants
+
+The following specified invariants are implemented and tested.
+
+- Invariant of Sum of asset balances times their price (according to price
+    feed) a fund holds divided by the amount of total shares in existence of
+    this fund (`= totalSupply`) is equal to its `sharePrice`
+    ```
+    sumForAllAssets(assetBalance * assetPrice) / totalShares == sharePrice
+    ```
+
+    Tested in `checkSharePrice`, and `simpleCheckSharePrice`.
+
+    Found to only hold up to a certain precision. For realistic asset prices
+    and mild variations over time the property holds to a precision of eight
+    decimal places. In case of large differences between asset prices (relative
+    to `max(uint256)`) and price variations on the order of 100%, differences
+    in the expected and actual share-price on the order of 10% can be observed.
+
+- Allocation of management, performance and governance fees to manager does not
+    alter the `sharePrice`
+
+    Tested in `checkFeeAllocation`.
+
+- Sending of assets to an exchange using a `makeOrder` does not alter the
+    `sharePrice`
+
+    Tested in `checkMakeOrder`.
+
+- Investment and redemption by regular means (`request` and `execute`, not
+    `emergencyRedeem`) do not immediately alter share price
+
+    Tested directly in `CheckRequestInvestment`.
+    
+    Found to not be the case for `executeRequest` of an investment request.
+
+    Tested indirectly in `requestValidInvestment`, and `executeValidInvestment`
+    and the expected `sharePrice` according to the model.
+
+- Fails to execute if not in line with current Risk Management module
+    `function callOnExchange ...`
+
+    Tested in `checkMakeOrder` for `makeOrder` on `MatchingMarket`.
+
+
+## Discovered issues
+
+Some instances where the specified invariants do not always hold on the Melon
+fund were discovered during the development of these property-tests. The tests
+have been adapted to accept the current behaviour and succeed on the Melon fund
+in its current form. To allow to proceed with the development of the
+property-tests. The discovered issues are due to round-off errors in the
+share-price calculation, or other places, within the Melon fund, or due to
+`uint256` overflows during price-calculations in case of very large asset
+prices in the price-feed.
+
+Failing test-cases or parameters causing test-case failure have been commented
+out and market with `FAILURE`. These can be uncommented one-by-one to observe
+the failure and test if future work on the fund has fixed the issue.
