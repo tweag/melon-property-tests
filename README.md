@@ -100,7 +100,35 @@ is necessary to change into the `melon` subdirectory.
 $ nix-shell --run '
     export WEB3_PROVIDER=http://localhost:9999
     cd melon;
-    cabal new-exec melon-property-tests;
+    cabal new-exec melon-property-tests check;
+    '
+```
+
+Additional parameters, like the number of tests to execute, can be passed as
+follows.
+
+``` shell
+$ nix-shell --run '
+    cd melon;
+    cabal new-exec -- melon-property-tests --limit 100 --commands 500 check
+    '
+```
+
+If a failure is encountered, it will print out the parameters required to
+re-run the same test-case. E.g.
+
+```
+> recheck (Size 9) (Seed 1362669552689423001 (-6519104247039517787)) prop_melonport
+```
+
+The test-case can be re-checked as follows.
+
+``` shell
+$ nix-shell --run '
+    cd melon;
+    cabal new-exec -- \
+      melon-property-tests --limit 100 --commands 500 -- \
+      recheck-simple 9 1362669552689423001 -6519104247039517787
     '
 ```
 
@@ -115,11 +143,12 @@ REPL as follows:
 $ cabal new-repl melon
 ghci> :load Melon.Test
 ghci> -- Run all tests with 20 repetitions and up to 200 commands.
-ghci> tests 20 200
+ghci> cfg = defaultTestConfig { _tcTestLimit = 20, _tcNumCommands = 200 }
+ghci> tests cfg
 ghci> -- Re-check a particular test-case failure in the simple tests.
-ghci> recheck_prop_melonport (Size 8) (Seed 908... (-562...))
+ghci> recheck_prop_melonport cfg (Size 8) (Seed 908... (-562...))
 ghci> -- Re-check a particular test-case failure in the model tests.
-ghci> recheck_prop_melonport_model (Size 8) (Seed 908... (-562...))
+ghci> recheck_prop_melonport_model cfg (Size 8) (Seed 908... (-562...))
 ghci> -- Reload if you made changes to the test-cases.
 ghci> :reload
 ```
