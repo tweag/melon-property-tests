@@ -1,8 +1,9 @@
 { mkDerivation, aeson, async, base, basement, bytestring, cereal
-, cryptonite, data-default, exceptions, generics-sop, hspec
-, hspec-contrib, hspec-discover, hspec-expectations, http-client
-, machines, memory, mtl, parsec, relapse, secp256k1, split, stdenv
-, stm, tagged, template-haskell, text, time, transformers
+, cryptonite, data-default, exceptions, generics-sop, hashable
+, hspec, hspec-contrib, hspec-discover, hspec-expectations
+, http-client, machines, memory, mtl, parsec, relapse, secp256k1
+, split, stdenv, stm, tagged, template-haskell, text, time
+, transformers
 }:
 mkDerivation {
   pname = "web3";
@@ -10,8 +11,8 @@ mkDerivation {
   src = ../../hs-web3;
   libraryHaskellDepends = [
     aeson async base basement bytestring cereal cryptonite data-default
-    exceptions generics-sop http-client machines memory mtl parsec
-    relapse secp256k1 tagged template-haskell text transformers
+    exceptions generics-sop hashable http-client machines memory mtl
+    parsec relapse secp256k1 tagged template-haskell text transformers
   ];
   testHaskellDepends = [
     async base bytestring data-default generics-sop hspec hspec-contrib

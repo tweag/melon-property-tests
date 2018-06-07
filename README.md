@@ -22,6 +22,15 @@ binary contract files. These binaries can either be provided externally, or
 generated from this repository. The Melon fund smart-contract is contained as a
 git submodule.
 
+If the set of dependencies changes, e.g. due to new node dependencies in the
+smart-contract or due to new haskell dependencies in the property-tests then
+the Nix shell can be updated by issuing the following commands.
+
+``` shell
+$ nix-shell --run update-node-deps
+$ nix-shell --run update-haskell-deps
+```
+
 
 ## Clone
 
@@ -93,4 +102,22 @@ $ nix-shell --run '
     cd melon;
     cabal new-exec melon-property-tests;
     '
+```
+
+
+## REPL
+
+If it becomes necessary to iterate on a particular test-case this can be more
+efficient to do within a REPL. The property-tests can be executed from within a
+REPL as follows:
+
+``` shell
+$ cabal new-repl melon
+ghci> :load Melon.Test
+ghci> -- Run all tests with 20 repetitions and up to 200 commands.
+ghci> tests 20 200
+ghci> -- Re-check a particular test-case failure in the simple tests.
+ghci> recheck_prop_melonport (Size 8) (Seed 908... (-562...))
+ghci> -- Re-check a particular test-case failure in the model tests.
+ghci> recheck_prop_melonport_model (Size 8) (Seed 908... (-562...))
 ```

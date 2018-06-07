@@ -90,6 +90,7 @@ executable melon-property-tests
   build-depends:       base >=4.10 && <4.11
                      , aeson
                      , aeson-pretty
+                     , ansi-wl-pprint
                      , async
                      , bytestring
                      , data-default
@@ -98,6 +99,7 @@ executable melon-property-tests
                      , lens-aeson
                      , melon
                      , mtl
+                     , optparse-applicative
                      , path
                      , path-io
                      , unordered-containers
