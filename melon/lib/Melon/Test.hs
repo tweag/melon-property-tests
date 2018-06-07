@@ -36,7 +36,7 @@ tests :: TestLimit -> Int -> IO Bool
 tests numTests numCommands = do
   manager <- newManager defaultManagerSettings
   provider <- getProvider
-  checkSequential $ Group "Melon.Test.Commands"
+  checkSequential $ Group "Melon.Test"
     [ ("prop_melonport", prop_melonport numTests numCommands manager provider)
     , ("prop_melonport_model", prop_melonport_model numTests numCommands manager provider)
     ]

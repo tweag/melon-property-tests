@@ -29,7 +29,7 @@ import qualified Melon.ABI.Fund as Fund
 import qualified Melon.ABI.PriceFeeds.CanonicalPriceFeed as CanonicalPriceFeed
 import qualified Melon.ABI.RiskMgmt.RMMakeOrders as RMMakeOrders
 import qualified Melon.ABI.Version.Version as Version
-import Melon.ThirdParty.Network.Ethereum.ABI.Codec (encodeCall, encodeSignature)
+import Melon.ThirdParty.Network.Ethereum.ABI.Codec (encodeSignature)
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth (getTransactionEvents)
 import Melon.Context
 import qualified Melon.Contract.PriceFeed as PriceFeed
@@ -76,17 +76,17 @@ checkIsFundShutdown input =
 
 -- | @CmdShutdownFund account@
 --
--- The given @account@ will attempt to shut-down the fund.
-newtype CmdShutdownFund (v :: * -> *)
-  = CmdShutdownFund Address
+-- The given @account@ will attempt to shut-down the fund if told to.
+data CmdShutdownFund (v :: * -> *)
+  = CmdShutdownFund !Address !Bool
   deriving (Eq, Show)
 instance HTraversable CmdShutdownFund where
-  htraverse _ (CmdShutdownFund account) =
-    pure $ CmdShutdownFund account
+  htraverse _ (CmdShutdownFund account shutdown) =
+    pure $ CmdShutdownFund account shutdown
 
 -- | Manager can shut-down the fund contract
 managerCanShutdownFund
-  :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
+  :: (Monad n, MonadGen n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
   => ModelInput
   -> Command n (MelonT m) ModelState
 managerCanShutdownFund input =
@@ -96,23 +96,27 @@ managerCanShutdownFund input =
 
     gen s
       | s^.msIsShutdown = Nothing -- Already shut-down
-      | otherwise       = Just $ pure $
+      | otherwise       = Just $
           CmdShutdownFund (input^.miFund.fdManager)
-    execute (CmdShutdownFund manager) = do
+            -- Once the fund was shutdown most tests cannot proceed. And
+            -- shutdown cannot be undone. Therefore, we make actual shutdown
+            -- unlikely to avoid the test-sequence being cut too short.
+            <$> Gen.frequency [(9, pure False), (1, pure True)]
+    execute (CmdShutdownFund _ False) = pure False
+    execute (CmdShutdownFund manager True) = do
       defaultCall <- getCall
       let managerCallVersion = defaultCall
             { callFrom = Just manager
             , callTo = Just version
             }
           callFund = defaultCall { callTo = Just fund }
-      annotateShow $ encodeCall Fund.ShutDownData
       void $ evalM $ liftWeb3 $ Version.shutDownFund managerCallVersion fund
       evalM $ liftWeb3 $ Fund.isShutDown callFund
   in
   Command gen execute
     [ Require $ \s _ -> not $ s^.msIsShutdown
-    , Update $ \s _ _ -> s & msIsShutdown .~ True
-    , Ensure $ \_ _ _ o -> o === True
+    , Update $ \s (CmdShutdownFund _ shutdown) _ -> s & msIsShutdown .~ shutdown
+    , Ensure $ \_ _ (CmdShutdownFund _ shutdown) o -> o === shutdown
     ]
 
 -- | No one but the manager can shut-down the fund contract
@@ -476,6 +480,11 @@ checkSharePrice input =
         --   fluctuating price-feed, with price-jumps on the order of 100%,
         --   this can lead to differences between the expected and observed
         --   share-price on the order of 10%.
+        --
+        --   Uncomment to reproduce:
+        --
+        --     sharePrice === (s^.msSharePrice)
+        --
         truncate' sharePrice === truncate' (s^.msSharePrice)
     ]
 
