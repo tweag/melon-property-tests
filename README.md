@@ -121,3 +121,40 @@ ghci> recheck_prop_melonport (Size 8) (Seed 908... (-562...))
 ghci> -- Re-check a particular test-case failure in the model tests.
 ghci> recheck_prop_melonport_model (Size 8) (Seed 908... (-562...))
 ```
+
+
+## Source code
+
+The property tests are implemented in the `melon` subdirectory of this
+repository. Other subdirectories are, `nix` containing all the Nix dependency
+definitions, `smart-contracts` containing the Melon fund repository, and
+`hs-web3` containing the library used for Web3 and smart-contract Haskell
+bindings. At this point a git subdirectory referring to a fork of the project,
+since some of the required functionality is not upstream, yet.
+
+The `melon` subdirectory contains the following notable items:
+
+- `app/Main.hs`
+    Defines the executable `melon-property-tests`. Parses command-line
+    arguments and then calls into the `melon` property-tests library.
+- `lib/Melon/Test.hs`
+    Defines the Melon fund initialization and the random generation of
+    commands. Contains the entry-point that is called from `app/Main.hs`.
+- `lib/Melon/Test/Commands.hs`
+    Defines the commands and invariants that are tested on the contract.
+- `lib/Melon/Model/`
+    Defines the property-test's model of the Melon fund.
+- `lib/Melon/Context.hs`
+    Defines the defaults for the Web3 provider and the call gas settings.
+- `lib/Melon/TH.hs`
+    Defines the defaults for the smart-contract binary location.
+- `lib/Melon/ABI/`
+    Defines the ABI bindings to the smart-contract. These are automatically
+    generated using template-Haskell.
+- `lib/Melon/Contract/`
+    Defines wrappers around some of the contract's raw ABI.
+- `lib/Melon/Contract/PriceFeed.hs`
+    Defines the price-feed update.
+- `lib/Melon/Contract/Version.hs`
+    Defines the asset configuration, which assets are available, their name and
+    the number of decimals.
