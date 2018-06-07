@@ -5,4 +5,5 @@
         ignore = all
 [submodule "hs-web3"]
 	path = hs-web3
-	url = https://github.com/airalab/hs-web3
+	url = https://github.com/aherrmann/hs-web3.git
+        branch = ah/master
