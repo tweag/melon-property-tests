@@ -174,7 +174,7 @@ prop_melonport numTests numCommands httpManager web3Provider =
   actions <- lift $ forAll $
     Gen.sequential (Range.linear 1 numCommands) state
       [ checkFeeAllocation input
-      , checkMakeOrderSharePrice input
+      , checkMakeOrder input
       , checkRequestInvestment input
       ]
   executeSequential state actions

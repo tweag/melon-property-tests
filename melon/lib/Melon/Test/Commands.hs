@@ -27,6 +27,7 @@ import qualified Melon.ABI.Assets.Asset as Asset
 import qualified Melon.ABI.Exchange.Adapter.MatchingMarketAdapter as MatchingMarketAdapter
 import qualified Melon.ABI.Fund as Fund
 import qualified Melon.ABI.PriceFeeds.CanonicalPriceFeed as CanonicalPriceFeed
+import qualified Melon.ABI.RiskMgmt.RMMakeOrders as RMMakeOrders
 import qualified Melon.ABI.Version.Version as Version
 import Melon.ThirdParty.Network.Ethereum.ABI.Codec (encodeCall, encodeSignature)
 import Melon.ThirdParty.Network.Ethereum.Web3.Eth (getTransactionEvents)
@@ -608,16 +609,16 @@ checkFeeAllocation input =
 ------------------------------------------------------------
 -- Make Order
 
-data CheckMakeOrderSharePrice (v :: * -> *)
-  = CheckMakeOrderSharePrice
+data CheckMakeOrder (v :: * -> *)
+  = CheckMakeOrder
       !(UIntN 256)  -- ^ Exchange index
       !(UIntN 256)  -- ^ Sell quantity
       !(UIntN 256)  -- ^ Get quantity
       !(HashMap Address (UIntN 256)) -- ^ Price-update
   deriving (Eq, Show)
-instance HTraversable CheckMakeOrderSharePrice where
-  htraverse _ (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity prices)
-    = CheckMakeOrderSharePrice
+instance HTraversable CheckMakeOrder where
+  htraverse _ (CheckMakeOrder exchangeIndex sellQuantity getQuantity prices)
+    = CheckMakeOrder
     <$> pure exchangeIndex
     <*> pure sellQuantity
     <*> pure getQuantity
@@ -627,14 +628,15 @@ instance HTraversable CheckMakeOrderSharePrice where
 --
 -- Sending of assets to an exchange using a makeOrder does not alter the
 -- sharePrice.
-checkMakeOrderSharePrice
+checkMakeOrder
   :: ( Monad n, MonadGen n, Monad m
      , MonadCatch m, MonadIO m, MonadTest m, MonadThrow m
      )
   => ModelInput
   -> Command n (MelonT m) SimpleModelState
-checkMakeOrderSharePrice input =
+checkMakeOrder input =
   let
+    nullAddress = "0x0000000000000000000000000000000000000000"
     quoteDecimals = input^.miVersion.vdQuoteDecimals
     updatePriceFeed = PriceFeed.updatePriceFeed (input^.miVersion)
     fund = input^.miFund.fdAddress
@@ -643,7 +645,7 @@ checkMakeOrderSharePrice input =
     giveAsset = input^.miVersion.vdMlnToken
     getAsset = input^.miVersion.vdEthToken
 
-    gen s = Just $ CheckMakeOrderSharePrice
+    gen s = Just $ CheckMakeOrder
       -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
       --   Indeed this causes the call to SimpleAdapter (index 0) to fail.
       -- XXX: Number of exchanges is hard-coded
@@ -651,11 +653,30 @@ checkMakeOrderSharePrice input =
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
       <*> pure (s^.smsPriceFeed.to head)
-    execute (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity prices) = do
+    execute (CheckMakeOrder exchangeIndex sellQuantity getQuantity prices) = do
       defaultCall <- getCall
 
+      --------------------------------------------------
+      -- Price feed must be up-to-date
       evalM $ updatePriceFeed prices
 
+      --------------------------------------------------
+      -- Check with risk management.
+      let callPriceFeed = defaultCall { callTo = Just (input^.miVersion.vdCanonicalPriceFeed) }
+      orderPrice <- evalM $ liftWeb3 $
+        CanonicalPriceFeed.getOrderPriceInfo callPriceFeed
+          giveAsset getAsset sellQuantity getQuantity
+      (_, referencePrice, _) <- evalM $ liftWeb3 $
+        CanonicalPriceFeed.getReferencePriceInfo callPriceFeed
+          giveAsset getAsset
+
+      let callRM = defaultCall { callTo = Just (input^.miVersion.vdRiskManagement) }
+      isPermitted <- evalM $ liftWeb3 $
+        RMMakeOrders.isMakePermitted callRM
+          orderPrice referencePrice giveAsset getAsset sellQuantity getQuantity
+
+      --------------------------------------------------
+      -- Share-price before
       let callFund = defaultCall { callTo = Just fund }
       -- FAILURE:
       --   The call to @calcSharePrice@ can fail if the price-feed produces
@@ -665,12 +686,13 @@ checkMakeOrderSharePrice input =
       --   could render the fund partially unusable.
       priceBeforeOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
+      --------------------------------------------------
+      -- Make the order
       let managerCallFund = callFund { callFrom = Just manager }
           -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
           --   Simple market is considered deprecated and should be removed.
           makeOrderSignature = encodeSignature (Proxy @MatchingMarketAdapter.MakeOrderData)
-          nullAddress = "0x0000000000000000000000000000000000000000"
-      evalM $ liftWeb3
+      didSucceed <- evalM $ liftWeb3
         (Fund.callOnExchange managerCallFund
           exchangeIndex
           makeOrderSignature
@@ -681,23 +703,31 @@ checkMakeOrderSharePrice input =
           "0x" -- identifier
           0 "0x" "0x" -- v r s
         >>= getTransactionEvents) >>= \case
-          [MatchingMarketAdapter.OrderUpdated _exchange _orderId 0] ->
+          [MatchingMarketAdapter.OrderUpdated _exchange _orderId 0] -> do
             annotate "makeOrder succeeded"
-          _ ->
+            pure True
+          _ -> do
             -- Make order might fail for all sorts of reasons.
             -- This test-case is not testing that aspect.
             annotate "makeOrder failed"
+            pure False
 
+      --------------------------------------------------
+      -- Share-price after
       priceAfterOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
-      pure (priceBeforeOrder, priceAfterOrder)
+      pure (priceBeforeOrder, priceAfterOrder, isPermitted, didSucceed)
   in
   Command gen execute
     [ Update $ \s _ _ -> s & smsPriceFeed %~ tail
-    , Ensure $ \_prior _after CheckMakeOrderSharePrice {}
-      (priceBeforeOrder, priceAfterOrder) -> do
+    , Ensure $ \_prior _after CheckMakeOrder {}
+      (priceBeforeOrder, priceAfterOrder, isPermitted, didSucceed) -> do
+        -- Share-price should not change immediately.
         let truncate' = truncateTo 8 quoteDecimals
         truncate' priceBeforeOrder === truncate' priceAfterOrder
+        -- Order should only be placed if risk management allows it.
+        when didSucceed $
+          assert isPermitted
     ]
 
 
