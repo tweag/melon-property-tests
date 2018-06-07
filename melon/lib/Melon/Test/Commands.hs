@@ -116,8 +116,9 @@ managerCanShutdownFund input =
 
 -- | No one but the manager can shut-down the fund contract
 --
--- XXX: This test-case is disabled because it causes timeouts
---   with hs-web3 and parity.
+-- XXX:
+--   This test-case is disabled because it causes timeouts with hs-web3 and
+--   parity.
 -- onlyManagerCanShutdownFund
 --   :: (Monad n, MonadGen n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
 --   => ModelInput m
@@ -172,7 +173,8 @@ instance HTraversable CmdRequestInvestment where
 -- transferred to the investor and approved for fund investment so that the
 -- investor can afford the investment.
 --
--- XXX: This test-case assumes that investment is always allowed.
+-- XXX:
+--   This test-case assumes that investment is always allowed.
 --   Currently, investment requests will always be allowed as long as
 --   investment in the particular asset is allowed. This will change once
 --   compliance is implemented.
@@ -337,8 +339,9 @@ executeValidInvestment input =
         getTransactionEvents tx >>= \case
           [Asset.Transfer {}] -> pure ()
           _ -> fail "Failed to transfer assets on investment."
-      -- XXX: Created events are not always fired,
-      --   even if the shares are created.
+      -- XXX:
+      --   @Created@ events are not always fired, even if the shares are
+      --   created.
       -- evalM $ liftWeb3 $
       --   getTransactionEvents tx >>= \case
       --     [Fund.Created {}] -> pure ()
@@ -461,6 +464,17 @@ checkSharePrice input =
         annotate $ "Expected share price: " ++ show (s^.msSharePrice)
         annotate $ "Actual share price: " ++ show sharePrice
         let truncate' = truncateTo 8 (s^.msQuoteDecimals)
+        -- FAILURE:
+        --   Round-off errors in the more complex share-price calculation
+        --   within the contract cause a discrepancy between the model's
+        --   share-price
+        --
+        --     sum (assetBalance * assetPrice) / totalShares
+        --
+        --   and the contract's share-price. For a strongly randomly
+        --   fluctuating price-feed, with price-jumps on the order of 100%,
+        --   this can lead to differences between the expected and observed
+        --   share-price on the order of 10%.
         truncate' sharePrice === truncate' (s^.msSharePrice)
     ]
 
@@ -643,11 +657,17 @@ checkMakeOrderSharePrice input =
       evalM $ updatePriceFeed prices
 
       let callFund = defaultCall { callTo = Just fund }
+      -- FAILURE:
+      --   The call to @calcSharePrice@ can fail if the price-feed produces
+      --   large asset-prices that lead to overflows in the price calculation
+      --   within the fund contract. A number of operations on the fund use
+      --   @calcSharePrice@ or similar internally. Such very large asset prices
+      --   could render the fund partially unusable.
       priceBeforeOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
       let managerCallFund = callFund { callFrom = Just manager }
           -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
-          --   Is that intentioal? Does that mean one of them will not be found?
+          --   Simple market is considered deprecated and should be removed.
           makeOrderSignature = encodeSignature (Proxy @MatchingMarketAdapter.MakeOrderData)
           nullAddress = "0x0000000000000000000000000000000000000000"
       evalM $ liftWeb3
