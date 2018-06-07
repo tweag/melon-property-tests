@@ -8,4 +8,4 @@ import Melon.Test
 
 
 main :: IO ()
-main = void tests
+main = void $ tests 20 200

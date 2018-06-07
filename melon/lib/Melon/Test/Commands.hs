@@ -42,7 +42,7 @@ truncateTo precision decimals value = value `div` (10^(decimals - precision))
 
 
 ----------------------------------------------------------------------
--- Commands and Invariants
+-- Commands and Invariants on Modelled Fund
 ----------------------------------------------------------------------
 
 ------------------------------------------------------------
@@ -464,6 +464,21 @@ checkSharePrice input =
         truncate' sharePrice === truncate' (s^.msSharePrice)
     ]
 
+
+----------------------------------------------------------------------
+-- Commands and Invariants on plain Fund
+----------------------------------------------------------------------
+
+------------------------------------------------------------
+-- Share Price
+
+newtype CheckSharePrice (v :: * -> *)
+  = CheckSharePrice
+    (HashMap Address (UIntN 256)) -- ^ Price-update
+  deriving (Eq, Show)
+instance HTraversable CheckSharePrice where
+  htraverse _ (CheckSharePrice prices) = pure $ CheckSharePrice prices
+
 -- | Tests share-price invariant
 --
 -- Invariant of Sum of asset balances times their price (according to price
@@ -472,27 +487,26 @@ checkSharePrice input =
 -- @
 --   SumForAllAssets(assetBalance * assetPrice) / totalShares == sharePrice
 -- @
-checkSharePriceOld
+simpleCheckSharePrice
   :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
   => ModelInput
-  -> Command n (MelonT m) ModelState
-checkSharePriceOld input =
+  -> Command n (MelonT m) SimpleModelState
+simpleCheckSharePrice input =
   let
     updatePriceFeed = PriceFeed.updatePriceFeed (input^.miVersion)
     fund = input^.miFund.fdAddress
     priceFeed = input^.miVersion.vdCanonicalPriceFeed
     assets = input^.miVersion.vdAssets.to HashMap.keys
+    quoteDecimals = input^.miVersion.vdQuoteDecimals
 
-    gen s
-      | s^.msIsShutdown = Nothing
-      | otherwise = Just $ pure CheckSharePrice
-    execute CheckSharePrice = do
+    gen s = Just $ pure $ CheckSharePrice (s^.smsPriceFeed.to head)
+    execute (CheckSharePrice prices) = do
       defaultCall <- view ctxCall
 
-      evalM $ updatePriceFeed undefined
+      evalM $ updatePriceFeed prices
 
       let callPriceFeed = defaultCall { callTo = Just priceFeed }
-      (prices, _timestamps) <- evalM $ liftWeb3 $
+      (prices', _timestamps) <- evalM $ liftWeb3 $
         CanonicalPriceFeed.getPrices callPriceFeed assets
 
       balances <- evalM $ liftWeb3 $ forM assets $ \asset -> do
@@ -502,37 +516,35 @@ checkSharePriceOld input =
       let callFund = defaultCall { callTo = Just fund }
       totalShares <- evalM $ liftWeb3 $ Fund.totalSupply callFund
       sharePrice <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
-      decimals <- evalM $ liftWeb3 $ Fund.getDecimals callFund
 
-      pure (prices, balances, totalShares, sharePrice, decimals)
+      pure (prices', balances, totalShares, sharePrice)
   in
   Command gen execute
-    [ Require $ \s _ -> not $ s^.msIsShutdown
-    , Ensure $ \_prior _after CheckSharePrice
-      (prices, balances, totalShares, sharePrice, decimals) -> do
-        let precision = 8 :: UIntN 256
-            dropDecimals = decimals - precision
-            truncate' = (`div` (10^dropDecimals))
+    [ Update $ \s _ _ -> s & smsPriceFeed %~ tail
+    , Ensure $ \_prior _after CheckSharePrice {}
+      (prices, balances, totalShares, sharePrice) -> do
         footnote $ "prices " ++ show prices
         footnote $ "balances " ++ show balances
         footnote $ "totalShares " ++ show totalShares
-        footnote $ "decimals " ++ show decimals
-        footnote $ "dropDecimals " ++ show dropDecimals
         length prices === length balances
         unless (totalShares == 0) $ do
           let calculatedSharePrice =
                 sum (zipWith (*) balances prices)
                 `div`
                 totalShares
-          -- Property only holds to a certain precision.
+              -- Property only holds to a certain precision.
+              truncate' = truncateTo 8 quoteDecimals
           truncate' sharePrice === truncate' calculatedSharePrice
     ]
 
-data CheckSharePrice (v :: * -> *) = CheckSharePrice
-  deriving (Eq, Show)
-instance HTraversable CheckSharePrice where
-  htraverse _ CheckSharePrice = pure CheckSharePrice
 
+------------------------------------------------------------
+-- Fee Allocation
+
+data CheckFeeAllocation (v :: * -> *) = CheckFeeAllocation
+  deriving (Eq, Show)
+instance HTraversable CheckFeeAllocation where
+  htraverse _ CheckFeeAllocation = pure CheckFeeAllocation
 
 -- | Tests fee-allocation property
 --
@@ -549,19 +561,15 @@ instance HTraversable CheckSharePrice where
 checkFeeAllocation
   :: (Monad n, Monad m, MonadCatch m, MonadIO m, MonadTest m, MonadThrow m)
   => ModelInput
-  -> Command n (MelonT m) ModelState
+  -> Command n (MelonT m) SimpleModelState
 checkFeeAllocation input =
   let
-    updatePriceFeed = PriceFeed.updatePriceFeed (input^.miVersion)
     fund = input^.miFund.fdAddress
+    quoteDecimals = input^.miVersion.vdQuoteDecimals
 
-    gen s
-      | s^.msIsShutdown = Nothing
-      | otherwise = Just $ pure CheckFeeAllocation
+    gen _ = Just $ pure CheckFeeAllocation
     execute CheckFeeAllocation = do
       defaultCall <- view ctxCall
-
-      evalM $ updatePriceFeed undefined
 
       let callFund = defaultCall { callTo = Just fund }
       priceBeforeAlloc <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
@@ -571,30 +579,35 @@ checkFeeAllocation input =
           [Fund.CalculationUpdate _ _ _ _ sharePrice _] -> pure sharePrice
           _ -> fail "calcSharePriceAndAllocateFees failed"
       priceAfterAlloc <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
-      decimals <- evalM $ liftWeb3 $ Fund.getDecimals callFund
 
-      pure (priceBeforeAlloc, priceAfterAlloc, decimals)
+      pure (priceBeforeAlloc, priceAfterAlloc)
   in
   Command gen execute
-    [ Require $ \s _ -> not $ s^.msIsShutdown
-    , Ensure $ \_prior _after CheckFeeAllocation
-      (priceBeforeAlloc, priceAfterAlloc, decimals) -> do
-        let precision = 8 :: UIntN 256
-            dropDecimals = decimals - precision
-            truncate' = (`div` (10^dropDecimals))
-        footnote $ "decimals " ++ show decimals
-        footnote $ "dropDecimals " ++ show dropDecimals
+    [ Ensure $ \_prior _after CheckFeeAllocation
+      (priceBeforeAlloc, priceAfterAlloc) -> do
+        let truncate' = truncateTo 8 quoteDecimals
         -- Property only holds to a certain precision.
-        -- It does not seem to be influenced by time, this was checked by
-        -- introducing an up to one second delay after `priceBeforeAlloc`.
         truncate' priceBeforeAlloc === truncate' priceAfterAlloc
     ]
 
-data CheckFeeAllocation (v :: * -> *) = CheckFeeAllocation
-  deriving (Eq, Show)
-instance HTraversable CheckFeeAllocation where
-  htraverse _ CheckFeeAllocation = pure CheckFeeAllocation
 
+------------------------------------------------------------
+-- Make Order
+
+data CheckMakeOrderSharePrice (v :: * -> *)
+  = CheckMakeOrderSharePrice
+      !(UIntN 256)  -- ^ Exchange index
+      !(UIntN 256)  -- ^ Sell quantity
+      !(UIntN 256)  -- ^ Get quantity
+      !(HashMap Address (UIntN 256)) -- ^ Price-update
+  deriving (Eq, Show)
+instance HTraversable CheckMakeOrderSharePrice where
+  htraverse _ (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity prices)
+    = CheckMakeOrderSharePrice
+    <$> pure exchangeIndex
+    <*> pure sellQuantity
+    <*> pure getQuantity
+    <*> pure prices
 
 -- | Test make-order share-price property
 --
@@ -605,34 +618,31 @@ checkMakeOrderSharePrice
      , MonadCatch m, MonadIO m, MonadTest m, MonadThrow m
      )
   => ModelInput
-  -> Command n (MelonT m) ModelState
+  -> Command n (MelonT m) SimpleModelState
 checkMakeOrderSharePrice input =
   let
+    quoteDecimals = input^.miVersion.vdQuoteDecimals
+    updatePriceFeed = PriceFeed.updatePriceFeed (input^.miVersion)
     fund = input^.miFund.fdAddress
     manager = input^.miFund.fdManager
-    updatePriceFeed = PriceFeed.updatePriceFeed (input^.miVersion)
-    -- XXX: Could we pick these at random?
+    -- XXX: Pick these at random
     giveAsset = input^.miVersion.vdMlnToken
     getAsset = input^.miVersion.vdEthToken
 
-    gen s
-      | s^.msIsShutdown = Nothing
-      | otherwise = Just $ CheckMakeOrderSharePrice
+    gen s = Just $ CheckMakeOrderSharePrice
       -- XXX: MatchingMarketAdapter and SimpleAdapter have mismatching signatures.
       --   Indeed this causes the call to SimpleAdapter (index 0) to fail.
       -- XXX: Number of exchanges is hard-coded
       <$> Gen.integral (Range.linear 1 2)
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
       <*> Gen.integral (Range.linear 1 (10^(23::Int)))
-    execute (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity) = do
+      <*> pure (s^.smsPriceFeed.to head)
+    execute (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity prices) = do
       defaultCall <- getCall
 
+      evalM $ updatePriceFeed prices
+
       let callFund = defaultCall { callTo = Just fund }
-      decimals <- evalM $ liftWeb3 $ Fund.getDecimals callFund
-      -- Need to update the price feed here. Otherwise, 'calcSharePrice' might
-      -- fail.
-      -- XXX: Should we automatically run 'calcSharePrice' every so often?
-      evalM $ updatePriceFeed undefined
       priceBeforeOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
       let managerCallFund = callFund { callFrom = Just manager }
@@ -660,34 +670,38 @@ checkMakeOrderSharePrice input =
 
       priceAfterOrder <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
 
-      pure (priceBeforeOrder, priceAfterOrder, decimals)
+      pure (priceBeforeOrder, priceAfterOrder)
   in
   Command gen execute
-    [ Require $ \s _ -> not $ s^.msIsShutdown
+    [ Update $ \s _ _ -> s & smsPriceFeed %~ tail
     , Ensure $ \_prior _after CheckMakeOrderSharePrice {}
-      (priceBeforeOrder, priceAfterOrder, decimals) -> do
-        let precision = 8 :: UIntN 256
-            dropDecimals = decimals - precision
-            truncate' = (`div` (10^dropDecimals))
-        footnote $ "decimals " ++ show decimals
-        footnote $ "dropDecimals " ++ show dropDecimals
-        -- Property only holds to a certain precision.
+      (priceBeforeOrder, priceAfterOrder) -> do
+        let truncate' = truncateTo 8 quoteDecimals
         truncate' priceBeforeOrder === truncate' priceAfterOrder
     ]
 
-data CheckMakeOrderSharePrice (v :: * -> *)
-  = CheckMakeOrderSharePrice
-      !(UIntN 256)  -- ^ Exchange index
-      !(UIntN 256)  -- ^ Sell quantity
-      !(UIntN 256)  -- ^ Get quantity
-  deriving (Eq, Show)
-instance HTraversable CheckMakeOrderSharePrice where
-  htraverse _ (CheckMakeOrderSharePrice exchangeIndex sellQuantity getQuantity)
-    = CheckMakeOrderSharePrice
-    <$> pure exchangeIndex
-    <*> pure sellQuantity
-    <*> pure getQuantity
 
+------------------------------------------------------------
+-- Request Investment
+
+data CheckRequestInvestment (v :: * -> *)
+  = CheckRequestInvestment
+      !Address -- ^ Investor
+      !Address -- ^ Trade token
+      !(UIntN 256) -- ^ Give quantity
+      !(UIntN 256) -- ^ Share quantity
+      !(HashMap Address (UIntN 256)) -- ^ Price-update 1
+      !(HashMap Address (UIntN 256)) -- ^ Price-update 2
+  deriving (Eq, Show)
+instance HTraversable CheckRequestInvestment where
+  htraverse _ (CheckRequestInvestment investor token give share prices prices')
+    = CheckRequestInvestment
+    <$> pure investor
+    <*> pure token
+    <*> pure give
+    <*> pure share
+    <*> pure prices
+    <*> pure prices'
 
 -- | Test request-investment property
 --
@@ -698,21 +712,21 @@ checkRequestInvestment
      , MonadCatch m, MonadIO m, MonadTest m, MonadThrow m
      )
   => ModelInput
-  -> Command n (MelonT m) ModelState
+  -> Command n (MelonT m) SimpleModelState
 checkRequestInvestment input =
   let
     updatePriceFeed = PriceFeed.updatePriceFeed (input^.miVersion)
     fund = input^.miFund.fdAddress
     owner = input^.miVersion.vdOwner
 
-    gen s
-      | s^.msIsShutdown = Nothing
-      | otherwise = Just $ CheckRequestInvestment
+    gen s = Just $ CheckRequestInvestment
           <$> Gen.element (input^.miInvestors)
           <*> Gen.element (input^.miVersion.vdAssets.to HashMap.keys)
           <*> Gen.integral (Range.linear 1 100000)
           <*> Gen.integral (Range.linear 1 100000)
-    execute (CheckRequestInvestment investor token give share) = do
+          <*> pure (s^.smsPriceFeed.to head)
+          <*> pure (s^.smsPriceFeed.to (!!2))
+    execute (CheckRequestInvestment investor token give share prices prices') = do
       defaultCall <- getCall
       let callFund = defaultCall { callTo = Just fund }
           ownerCallToken = defaultCall
@@ -728,14 +742,25 @@ checkRequestInvestment input =
             , callTo = Just fund
             }
 
-      -- Price-feed must be up-to-date
-      evalM $ updatePriceFeed undefined
+      -- Price-feed must be updated
+      evalM $ updatePriceFeed prices
 
-      -- Share-price before
-      priceBefore <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
+      -- Share-price before request
+      priceBeforeRequest <- evalM $ liftWeb3 $
+        Fund.calcSharePrice callFund
+
+      -- Request investment
+      reqId <- evalM $ liftWeb3 $
+        Fund.requestInvestment investorCallFund give share token
+        >>= getTransactionEvents >>= \case
+          [Fund.RequestUpdated reqId] -> pure reqId
+          _ -> fail "Investment request failed."
+
+      -- Share-price after request
+      priceAfterRequest <- evalM $ liftWeb3 $
+        Fund.calcSharePrice callFund
 
       -- Transfer the amount
-      -- XXX: Take previous transfers into account
       evalM $ liftWeb3 $
         Asset.transfer ownerCallToken investor give
         >>= getTransactionEvents >>= \case
@@ -743,45 +768,28 @@ checkRequestInvestment input =
           _ -> fail "Token transfer failed."
 
       -- Approve the amount
-      -- XXX: Take previous approval into account
       evalM $ liftWeb3 $
         Asset.approve investorCallToken fund give
         >>= getTransactionEvents >>= \case
           [Asset.Approval {}] -> pure ()
           _ -> fail "Investor token approval failed."
 
-      -- Request investment
-      -- XXX: Keep track of open investment requests
-      _reqId <- evalM $ liftWeb3 $
-        Fund.requestInvestment investorCallFund give share token
-        >>= getTransactionEvents >>= \case
-          [Fund.RequestUpdated reqId] -> pure reqId
-          _ -> fail "Investment request failed."
+      -- Price-feed must be updated twice
+      evalM $ updatePriceFeed prices
+      evalM $ updatePriceFeed prices
 
-      -- Share-price after investment
-      priceAfter <- evalM $ liftWeb3 $ Fund.calcSharePrice callFund
+      -- Attempt to execute request.
+      void $ evalM $ liftWeb3 $
+        Fund.executeRequest investorCallFund reqId
 
-      pure (priceBefore, priceAfter)
+      -- Price-feed must be updated
+      evalM $ updatePriceFeed prices'
+
+      pure (priceBeforeRequest, priceAfterRequest)
   in
   Command gen execute
-    [ Require $ \s _ -> not $ s^.msIsShutdown
+    [ Update $ \s _ _ -> s & smsPriceFeed %~ (drop 2)
     , Ensure $ \_prior _after CheckRequestInvestment {}
-      (priceBefore, priceAfter) -> do
-        -- Property holds exactly.
-        priceBefore === priceAfter
+      (priceBeforeRequest, priceAfterRequest) -> do
+        priceBeforeRequest === priceAfterRequest
     ]
-
-data CheckRequestInvestment (v :: * -> *)
-  = CheckRequestInvestment
-      !Address -- ^ Investor
-      !Address -- ^ Trade token
-      !(UIntN 256) -- ^ Give quantity
-      !(UIntN 256) -- ^ Share quantity
-  deriving (Eq, Show)
-instance HTraversable CheckRequestInvestment where
-  htraverse _ (CheckRequestInvestment investor token give share)
-    = CheckRequestInvestment
-    <$> pure investor
-    <*> pure token
-    <*> pure give
-    <*> pure share

@@ -16,6 +16,14 @@ import Network.Ethereum.ABI.Prim.Address (Address)
 import Network.Ethereum.ABI.Prim.Int (UIntN)
 
 
+newtype SimpleModelState (v :: * -> *) = SimpleModelState
+  { _smsPriceFeed :: [HashMap Address (UIntN 256)]
+  } deriving (Eq, Ord, Show)
+instance HTraversable SimpleModelState where
+  htraverse _ (SimpleModelState priceFeed) = pure $
+    SimpleModelState priceFeed
+
+
 data ModelState (v :: * -> *) = ModelState
   { _msQuoteAsset :: !Address
     -- ^ Quote asset
@@ -70,6 +78,7 @@ instance HTraversable InvestmentRequest where
     <*> pure (_irPriceUpdateId req)
 
 
+makeClassy ''SimpleModelState
 makeClassy ''ModelState
 makeClassy ''InvestmentRequest
 

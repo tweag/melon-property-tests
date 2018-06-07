@@ -30,12 +30,33 @@ import Melon.Test.Commands
 
 
 -- | Executes all test-cases.
-tests :: IO Bool
-tests = do
+--
+--
+tests :: TestLimit -> Int -> IO Bool
+tests numTests numCommands = do
   manager <- newManager defaultManagerSettings
   provider <- getProvider
   checkSequential $ Group "Melon.Test.Commands"
-    [ ("prop_melonport_model", prop_melonport_model 20 200 manager provider) ]
+    [ ("prop_melonport", prop_melonport numTests numCommands manager provider)
+    , ("prop_melonport_model", prop_melonport_model numTests numCommands manager provider)
+    ]
+
+
+-- | Recheck a particular test-case.
+--
+-- If a test-case fails and the message says some thing along the lines of
+--
+--    > recheck (Size 8) (Seed 9082926469563838346 (-5629536107532025561)) prop_melonport
+--
+-- Then you can perform that re-check by executing
+--
+--     recheck_prop_melonport (Size 8) (Seed 908... (-562...))
+--
+recheck_prop_melonport :: Size -> Seed -> IO ()
+recheck_prop_melonport size seed = do
+  manager <- newManager defaultManagerSettings
+  provider <- getProvider
+  recheck size seed (prop_melonport 20 200 manager provider)
 
 
 -- | Recheck a particular test-case.
@@ -46,30 +67,32 @@ tests = do
 --
 -- Then you can perform that re-check by executing
 --
---     recheck_prop_melonport (Size 8) (Seed 908... (-562...))
+--     recheck_prop_melonport_model (Size 8) (Seed 908... (-562...))
 --
-recheck_prop_melonport :: Size -> Seed -> IO ()
-recheck_prop_melonport size seed = do
+recheck_prop_melonport_model :: Size -> Seed -> IO ()
+recheck_prop_melonport_model size seed = do
   manager <- newManager defaultManagerSettings
   provider <- getProvider
   recheck size seed (prop_melonport_model 20 200 manager provider)
 
 
--- | Defines the Melon fund state-machine test.
+-- | Simple Melon fund state-machine test.
 --
 -- First, sets up a version and fund contract with some fixed and some random
 -- parameters. Then, generates a random sequence of commands to execute on
 -- the fund contract. Finally, executes these commands and checks specified
--- invariants in-between. If a counter-example is discovered, the test-library
--- will "shrink" the random inputs to try and uncover a minimal counter example.
+-- invariants in-between.
 --
--- "Shrinking" generally means to choose smaller values for parameters that
--- where chosen at random. E.g. if, initially, a value of 10^17 was chosen for
--- @managementFee@, then shrinking will check if the invariant still fails for
--- smaller and smaller values of @managementFee@ until it hits the minimum
--- value, zero in this case.
-prop_melonport_model :: TestLimit -> Int -> Manager -> Provider -> Property
-prop_melonport_model numTests numCommands httpManager web3Provider =
+-- These tests do not carry a model of the fund contract. Instead, where
+-- required the current state of the contract is simply queried before
+-- performing an operation.
+--
+-- The advantage is that more operations can be encoded without the need to
+-- develop a precise model of all the contract components. E.g. time-based
+-- effects like the management fees can be incorporated in the tests this way
+-- without the need to fully model their effects.
+prop_melonport :: TestLimit -> Int -> Manager -> Provider -> Property
+prop_melonport numTests numCommands httpManager web3Provider =
   withTests numTests $
   withShrinks 0 $
   withRetries 0 $
@@ -83,6 +106,109 @@ prop_melonport_model numTests numCommands httpManager web3Provider =
     Gen.integral (Range.linear 0 (hundredPercent - 1))
   performanceFee <- lift $ forAll $
     Gen.integral (Range.linear 0 (hundredPercent - 1))
+
+  ----------------------------------------------------------
+  -- Setup version and fund
+  owner:manager:investors <- liftWeb3 accounts
+  version <- Version.deploy owner
+  fund <- Fund.deploy version manager managementFee performanceFee
+
+  -- Enable investment and redemption
+  -- XXX:
+  --   For now we just enable investment/redemeption of all assets.
+  --   This should be captured by the model state and enabling/disabling
+  --   investment/redemption should be made into commands.
+  defaultCall <- getCall
+  let managerCallFund = defaultCall
+        { callFrom = Just $ fund^.fdManager
+        , callTo = Just $ fund^.fdAddress
+        }
+      assets = version^.vdAssets.to HashMap.keys
+  void $ liftWeb3 $ Fund.enableInvestment managerCallFund assets
+  void $ liftWeb3 $ Fund.enableRedemption managerCallFund assets
+
+  ----------------------------------------------------------
+  -- Setup price feed update
+  (_prices, priceFeed) <- do
+    priceFeedSpec <- lift $ forAll $ genPriceFeedSpec version
+    prices:priceFeed <- liftIO $ PriceFeed.createPriceFeed priceFeedSpec
+    -- Perform one initial price-feed update.
+    PriceFeed.updatePriceFeed version prices
+    pure (prices, priceFeed)
+
+  ----------------------------------------------------------
+  -- Test model
+  let input = ModelInput
+        { _miVersion = version
+        , _miFund = fund
+        , _miInvestors = investors
+        }
+      state = SimpleModelState
+        { _smsPriceFeed = priceFeed
+        }
+
+  ----------------------------------------------------------
+  -- Footnotes
+
+  -- Accounts
+  footnote $ "Owner: " ++ show owner
+  footnote $ "Manager: " ++ show manager
+  footnote $ "Investors:\n" ++ unlines
+    [ "  " ++ show investor | investor <- investors ]
+
+  -- Contracts
+  footnote $ "Version: " ++ show (version^.vdAddress)
+  footnote $ "Fund: " ++ show (fund^.fdAddress)
+
+  -- Assets
+  footnote $ "Assets:\n" ++ unlines
+    [ "  "
+      ++ (C8.unpack . convert $ asset^.asName)
+      ++ ": " ++ show address
+    | (address, asset) <- input^.miVersion.vdAssets.to HashMap.toList
+    ]
+
+  ----------------------------------------------------------
+  -- Execute commands
+
+  actions <- lift $ forAll $
+    Gen.sequential (Range.linear 1 numCommands) state
+      [ checkFeeAllocation input
+      , checkMakeOrderSharePrice input
+      , checkRequestInvestment input
+      ]
+  executeSequential state actions
+
+
+-- | Modelled Melon fund state-machine test.
+--
+-- First, sets up a version and fund contract with some fixed and some random
+-- parameters. Then, generates a random sequence of commands to execute on
+-- the fund contract. Finally, executes these commands and checks specified
+-- invariants in-between.
+--
+-- These tests carry a model of the fund contract. This allows for more precise
+-- tests, e.g. expecting that certain investments should always succeed.
+-- On the other hand, certain aspects cannot be modelled properly without
+-- mocking the external effects that they depend on. Time-based effects like
+-- the management fees would best be modelled with a mocked time-source where
+-- the tests could explicitely tell parity when to advance the clock.
+prop_melonport_model :: TestLimit -> Int -> Manager -> Provider -> Property
+prop_melonport_model numTests numCommands httpManager web3Provider =
+  withTests numTests $
+  withShrinks 0 $
+  withRetries 0 $
+  property $
+  runMelonT httpManager web3Provider $ do
+
+  ----------------------------------------------------------
+  -- Determine fees
+  let -- Fixed to zero as time-based effects are not modelled at the moment.
+      -- These are tested at non-zero values in the simple tests.
+      managementFee = 0
+      -- XXX: Incorporate markets into the model
+      --   These are tested at non-zero values in the simple tests.
+      performanceFee = 0
 
   ----------------------------------------------------------
   -- Setup version and fund
@@ -165,11 +291,8 @@ prop_melonport_model numTests numCommands httpManager web3Provider =
       , checkSharePrice input
       , requestValidInvestment input
       , executeValidInvestment input
-      -- , checkIsFundShutdown input
-      -- , managerCanShutdownFund input
-      -- , checkFeeAllocation input
-      -- , checkMakeOrderSharePrice input
-      -- , checkRequestInvestment input
+      , checkIsFundShutdown input
+      , managerCanShutdownFund input
       ]
   executeSequential state actions
 
@@ -186,7 +309,7 @@ genPriceFeedSpec version = do
       --     Gen.list (Range.linear 1 100) $ -- a cycle of up to 100 prices
       --       fmap (HashMap.fromList . zip assets) $
       --       Gen.list (Range.singleton numAssets) $ -- one price per asset
-      --         -- XXX:
+      --         -- FAILURE:
       --         --   The CanonicalPriceFeed.collectAndUpdate operation does
       --         --   not complete on an all zero price update, or an update
       --         --   of the form @[0, 1, 1]@.
@@ -207,16 +330,31 @@ genPriceFeedSpec version = do
         pure $ PriceFeed.RealisticCyclicPriceFeed
           "MLN" 18 (version^.vdAssets) variations
   Gen.frequency
-    [ (1, realisticCyclicPriceSource)
-    -- XXX:
+    [ (1, realisticConstantPriceSource)
+    , (2, realisticCyclicPriceSource)
+    -- FAILURE:
     --   Strong fluctuations in the price-feed can amplify the rounding issues
     --   within the Melon func contract and cause differences between expected
     --   and observed share-price on the order of 10%.
     -- , (1, unrealisticCyclicPriceSource (10^(30::Int)))
+    --
     -- XXX:
-    --   Too large prices cause overflow in the middle of the models
-    --   calculations. A general handling of that would be good, but for now
-    --   the price-feed is kept more sensible.
+    --   The model needs to be extended to detect uint256 overflow to be able
+    --   to predict when e.g. a investment will fail due to overflow.
+    --   Currently, this leads to discrepancy between the contract and the
+    --   model and consequently to test-case failure. A dedicated number type
+    --   could be a good approach. E.g.
+    --
+    --     -- | Unsigned fixed point decimal number with fixed amount of bits.
+    --     data UDecimal (bits :: Nat) (decimals :: Nat)
+    --       = UOverflow -- ^ The number is the result of an overflow.
+    --       | UValid (UIntN bits) -- ^ The number is valid.
+    --
+    --   The Num instances could then keep track of overflows.
+    --
+    --   For asset prices at different decimals we could have an existential
+    --   wrapper where the Num instances converts to common decimal precision
+    --   before performing operations and also keeps track of overflows.
+    --
     -- , (1, unrealisticCyclicPriceSource maxBound)
-    , (2, realisticConstantPriceSource)
     ]

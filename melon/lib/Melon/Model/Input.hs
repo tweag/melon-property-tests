@@ -7,8 +7,9 @@
 
 module Melon.Model.Input where
 
-import Control.Lens.TH (makeClassy)
+import Control.Lens
 import Data.HashMap.Strict (HashMap)
+import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
 import Network.Ethereum.ABI.Prim.Address (Address)
@@ -90,3 +91,8 @@ makeClassy ''MarketDeployment
 makeClassy ''VersionDeployment
 makeClassy ''FundDeployment
 makeClassy ''ModelInput
+
+
+vdQuoteDecimals :: Getter VersionDeployment Integer
+vdQuoteDecimals = to $ \s -> fromMaybe 0 $
+  s^?vdAssets.ix (s^.vdMlnToken).asDecimals
