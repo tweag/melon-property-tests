@@ -793,7 +793,12 @@ checkRequestInvestment input =
             }
 
       -- Price-feed must be updated
+      annotateShow prices
       evalM $ updatePriceFeed prices
+
+      -- Total shares before
+      sharesBefore <- evalM $ liftWeb3 $
+        Fund.totalSupply callFund
 
       -- Share-price before request
       priceBeforeRequest <- evalM $ liftWeb3 $
@@ -828,18 +833,44 @@ checkRequestInvestment input =
       evalM $ updatePriceFeed prices
       evalM $ updatePriceFeed prices
 
+      -- Share-price before execute
+      priceBeforeExecute <- evalM $ liftWeb3 $
+        Fund.calcSharePrice callFund
+
       -- Attempt to execute request.
       void $ evalM $ liftWeb3 $
         Fund.executeRequest investorCallFund reqId
 
+      -- Share-price after execute
+      priceAfterExecute <- evalM $ liftWeb3 $
+        Fund.calcSharePrice callFund
+
       -- Price-feed must be updated
       evalM $ updatePriceFeed prices'
 
-      pure (priceBeforeRequest, priceAfterRequest)
+      pure
+        ( sharesBefore
+        , priceBeforeRequest, priceAfterRequest
+        , priceBeforeExecute, priceAfterExecute
+        )
   in
   Command gen execute
     [ Update $ \s _ _ -> s & smsPriceFeed %~ (drop 2)
     , Ensure $ \_prior _after CheckRequestInvestment {}
-      (priceBeforeRequest, priceAfterRequest) -> do
+      ( _sharesBefore
+      , priceBeforeRequest, priceAfterRequest
+      , _priceBeforeExecute, _priceAfterExecute
+      ) -> do
         priceBeforeRequest === priceAfterRequest
+        -- FAILURE:
+        --   This property fails. E.g.
+        --
+        --     priceBeforeExecute === priceAfterExecute
+        --     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        --     │ Failed (- lhs =/= + rhs)
+        --     │ - 988274706867671691
+        --     │ + 987886944818304172
+        --
+        -- unless (sharesBefore == 0) $
+        --   priceBeforeExecute === priceAfterExecute
     ]
