@@ -6,11 +6,12 @@ module Main
   ( main
   ) where
 
+import Control.Lens ((^.))
 import Control.Monad (void)
 import Data.Bifunctor (first)
 import Data.Int (Int64)
 import Data.Semigroup ((<>))
-import Hedgehog (Seed (..), Size, TestLimit)
+import Hedgehog (Seed (..), Size)
 import Options.Applicative
 import qualified Options.Applicative.Help.Chunk as PP
 import qualified Options.Applicative.Help.Pretty as PP
@@ -21,20 +22,20 @@ import Melon.Test
 
 main :: IO ()
 main = do
-  cmd <- parseArgs
+  (cfg, cmd) <- parseArgs
   case cmd of
-    CheckAll testLimit numCommands ->
-      void $ tests testLimit numCommands
+    CheckAll ->
+      void $ tests cfg
     RecheckSimple size seed ->
-      recheck_prop_melonport size seed
+      recheck_prop_melonport cfg size seed
     RecheckModel size seed ->
-      recheck_prop_melonport_model size seed
+      recheck_prop_melonport_model cfg size seed
 
 
-parseArgs :: IO PropTestCommand
+parseArgs :: IO (TestConfig, PropTestCommand)
 parseArgs =
   execParser
-  $ info (parseCommand <**> helper)
+  $ info ((,) <$> parseConfig <*> parseCommand <**> helper)
     $  fullDesc
     <> progDescDoc propTestsDescription
     <> header propTestsHeader
@@ -58,9 +59,51 @@ parseArgs =
         \ not cannot be tested by these tests."
       ]
 
+    parseConfig = TestConfig
+      <$> parseTestLimit
+      <*> parseNumCommands
+      <*> parseShrinkLimit
+
+    parseTestLimit = option (eitherReader $ first ("LIMIT: " ++ ) . readPositive)
+      $  metavar "LIMIT"
+      <> value (defaultTestConfig^.tcTestLimit)
+      <> long "limit"
+      <> short 'l'
+      <> help "Positive number specifying the number of test-repetitions."
+      <> showDefaultWith (show @Int . fromIntegral)
+    parseNumCommands = option (eitherReader $ first ("COMMANDS: " ++) . readPositive)
+      $  metavar "COMMANDS"
+      <> value (defaultTestConfig^.tcNumCommands)
+      <> long "commands"
+      <> short 'c'
+      <> help "Positive number specifying the number commands to generate."
+      <> showDefault
+    parseShrinkLimit = option (eitherReader $ first ("SHRINKS: " ++) . readPositive)
+      $  metavar "SHRINKS"
+      <> value (defaultTestConfig^.tcShrinkLimit)
+      <> long "shrinks"
+      <> short 's'
+      <> help
+        "Positive number specifying the number of shrink attempts to be made.\
+        \ Shrinking tries to find a shorter, still valid, sequence of commands\
+        \ and invariants and continuously verifies these shorter sequences\
+        \ until a minimal counter example is found. This can help make the\
+        \ test report more understandable. However, it takes longer than\
+        \ displaying the result immediately, and it can emphasize differences\
+        \ between the model and the actual contract and point to differences\
+        \ in the wrong place."
+      <> showDefault
+
+    readPositive s = do
+      (n :: Int) <- readEither s
+      if n <= 0 then
+        Left "Must be a positive number."
+      else
+        pure (fromIntegral n)
+
     parseCommand = subparser
       $  command "check" (info
-          (CheckAll <$> parseTestLimit <*> parseNumCommands <**> helper)
+          (pure CheckAll <**> helper)
           (progDesc checkAllDesc))
       <> command "recheck-simple" (info
           (RecheckSimple <$> parseSize <*> parseSeed <**> helper)
@@ -105,20 +148,6 @@ parseArgs =
         "Note the double-dash to escape the minus sign."
       ]
 
-    parseTestLimit = option (eitherReader $ first ("LIMIT: " ++ ) . readPositive)
-      $  metavar "LIMIT"
-      <> value 20
-      <> long "limit"
-      <> short 'l'
-      <> help "Positive number specifying the number of test-repetitions."
-      <> showDefaultWith (show @Int . fromIntegral)
-    parseNumCommands = option (eitherReader $ first ("COMMANDS: " ++) . readPositive)
-      $  metavar "COMMANDS"
-      <> value 200
-      <> long "commands"
-      <> short 'c'
-      <> help "Positive number specifying the number commands to generate."
-      <> showDefault
     parseSize = argument (eitherReader $ first ("SIZE: " ++ ) . readPositive)
       $  metavar "SIZE"
       <> help "Size of the randomly generated data."
@@ -130,12 +159,6 @@ parseArgs =
       $  metavar "SEED2"
       <> help "The second component of the random seed, must be an odd number."
 
-    readPositive s = do
-      (n :: Int) <- readEither s
-      if n <= 0 then
-        Left "Must be a positive number."
-      else
-        pure (fromIntegral n)
     readInt64 s = do
       (n :: Int64) <- readEither s
       pure n
@@ -150,7 +173,7 @@ parseArgs =
 -- | Command-line commands to the property-tests executable.
 data PropTestCommand
     -- | Check all test-cases with given test-limit and number of commands.
-  = CheckAll TestLimit Int
+  = CheckAll
     -- | Recheck a particular simple test-case failure.
   | RecheckSimple Size Seed
     -- | Recheck a particular model test-case failure.

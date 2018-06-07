@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Melon.Test where
 
@@ -29,16 +30,31 @@ import Melon.Model.State
 import Melon.Test.Commands
 
 
+data TestConfig = TestConfig
+  { _tcTestLimit :: !TestLimit
+  , _tcNumCommands :: !Int
+  , _tcShrinkLimit :: !ShrinkLimit
+  } deriving Show
+makeClassy ''TestConfig
+
+defaultTestConfig :: TestConfig
+defaultTestConfig = TestConfig
+  { _tcTestLimit = 20
+  , _tcNumCommands = 100
+  , _tcShrinkLimit = 0
+  }
+
+
 -- | Executes all test-cases.
 --
 --
-tests :: TestLimit -> Int -> IO Bool
-tests numTests numCommands = do
+tests :: TestConfig -> IO Bool
+tests cfg = do
   manager <- newManager defaultManagerSettings
   provider <- getProvider
   checkSequential $ Group "Melon.Test"
-    [ ("prop_melonport", prop_melonport numTests numCommands manager provider)
-    , ("prop_melonport_model", prop_melonport_model numTests numCommands manager provider)
+    [ ("prop_melonport", prop_melonport cfg manager provider)
+    , ("prop_melonport_model", prop_melonport_model cfg manager provider)
     ]
 
 
@@ -50,13 +66,13 @@ tests numTests numCommands = do
 --
 -- Then you can perform that re-check by executing
 --
---     recheck_prop_melonport (Size 8) (Seed 908... (-562...))
+--     recheck_prop_melonport cfg (Size 8) (Seed 908... (-562...))
 --
-recheck_prop_melonport :: Size -> Seed -> IO ()
-recheck_prop_melonport size seed = do
+recheck_prop_melonport :: TestConfig -> Size -> Seed -> IO ()
+recheck_prop_melonport cfg size seed = do
   manager <- newManager defaultManagerSettings
   provider <- getProvider
-  recheck size seed (prop_melonport 20 200 manager provider)
+  recheck size seed (prop_melonport cfg manager provider)
 
 
 -- | Recheck a particular test-case.
@@ -67,13 +83,13 @@ recheck_prop_melonport size seed = do
 --
 -- Then you can perform that re-check by executing
 --
---     recheck_prop_melonport_model (Size 8) (Seed 908... (-562...))
+--     recheck_prop_melonport_model cfg (Size 8) (Seed 908... (-562...))
 --
-recheck_prop_melonport_model :: Size -> Seed -> IO ()
-recheck_prop_melonport_model size seed = do
+recheck_prop_melonport_model :: TestConfig -> Size -> Seed -> IO ()
+recheck_prop_melonport_model cfg size seed = do
   manager <- newManager defaultManagerSettings
   provider <- getProvider
-  recheck size seed (prop_melonport_model 20 200 manager provider)
+  recheck size seed (prop_melonport_model cfg manager provider)
 
 
 -- | Simple Melon fund state-machine test.
@@ -91,13 +107,14 @@ recheck_prop_melonport_model size seed = do
 -- develop a precise model of all the contract components. E.g. time-based
 -- effects like the management fees can be incorporated in the tests this way
 -- without the need to fully model their effects.
-prop_melonport :: TestLimit -> Int -> Manager -> Provider -> Property
-prop_melonport numTests numCommands httpManager web3Provider =
-  withTests numTests $
-  withShrinks 0 $
+prop_melonport :: TestConfig -> Manager -> Provider -> Property
+prop_melonport cfg httpManager web3Provider =
+  withTests (cfg^.tcTestLimit) $
+  withShrinks (cfg^.tcShrinkLimit) $
   withRetries 0 $
   property $
   runMelonT httpManager web3Provider $ do
+  let numCommands = cfg^.tcNumCommands
 
   ----------------------------------------------------------
   -- Determine fees
@@ -193,13 +210,14 @@ prop_melonport numTests numCommands httpManager web3Provider =
 -- mocking the external effects that they depend on. Time-based effects like
 -- the management fees would best be modelled with a mocked time-source where
 -- the tests could explicitely tell parity when to advance the clock.
-prop_melonport_model :: TestLimit -> Int -> Manager -> Provider -> Property
-prop_melonport_model numTests numCommands httpManager web3Provider =
-  withTests numTests $
-  withShrinks 0 $
+prop_melonport_model :: TestConfig -> Manager -> Provider -> Property
+prop_melonport_model cfg httpManager web3Provider =
+  withTests (cfg^.tcTestLimit) $
+  withShrinks (cfg^.tcShrinkLimit) $
   withRetries 0 $
   property $
   runMelonT httpManager web3Provider $ do
+  let numCommands = cfg^.tcNumCommands
 
   ----------------------------------------------------------
   -- Determine fees
