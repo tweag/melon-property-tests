@@ -101,6 +101,13 @@ parseArgs =
       else
         pure (fromIntegral n)
 
+    readNonNegative s = do
+      (n :: Int) <- readEither s
+      if n < 0 then
+        Left "Must not be a negative number."
+      else
+        pure (fromIntegral n)
+
     parseCommand = subparser
       $  command "check" (info
           (pure CheckAll <**> helper)
@@ -148,7 +155,7 @@ parseArgs =
         "Note the double-dash to escape the minus sign."
       ]
 
-    parseSize = argument (eitherReader $ first ("SIZE: " ++ ) . readPositive)
+    parseSize = argument (eitherReader $ first ("SIZE: " ++ ) . readNonNegative)
       $  metavar "SIZE"
       <> help "Size of the randomly generated data."
     parseSeed = Seed <$> parseSeedValue <*> parseSeedGamma
