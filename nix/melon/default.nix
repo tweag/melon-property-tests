@@ -1,10 +1,9 @@
-{ mkDerivation, aeson, aeson-casing, aeson-pretty, ansi-wl-pprint
-, async, base, bytestring, containers, cryptocompare, data-default
+{ mkDerivation, aeson-pretty, base, bytestring, data-default
 , decimal-arithmetic, file-embed, generics-sop, hedgehog
 , http-client, lens, lens-aeson, memory, mmorph, mtl
-, optparse-applicative, path, path-io, process, safe-exceptions
-, scientific, stdenv, template-haskell, text, transformers
-, unordered-containers, vector, web3, wreq
+, optparse-applicative, path, path-io, safe-exceptions, stdenv
+, template-haskell, text, transformers, unordered-containers, web3
+, wreq
 }:
 mkDerivation {
   pname = "melon";
@@ -13,17 +12,14 @@ mkDerivation {
   isLibrary = true;
   isExecutable = true;
   libraryHaskellDepends = [
-    aeson aeson-casing aeson-pretty async base bytestring containers
-    cryptocompare data-default decimal-arithmetic file-embed
-    generics-sop hedgehog http-client lens lens-aeson memory mmorph mtl
-    path path-io process safe-exceptions scientific template-haskell
-    text transformers unordered-containers web3 wreq
+    aeson-pretty base bytestring data-default decimal-arithmetic
+    file-embed generics-sop hedgehog http-client lens lens-aeson memory
+    mmorph mtl path path-io safe-exceptions template-haskell text
+    transformers unordered-containers web3 wreq
   ];
   executableHaskellDepends = [
-    aeson aeson-pretty ansi-wl-pprint async base bytestring
-    data-default hedgehog lens lens-aeson mtl optparse-applicative path
-    path-io unordered-containers vector web3
+    base hedgehog lens optparse-applicative
   ];
   description = "Property based random tests for Melon smart-contract";
-  license = stdenv.lib.licenses.gpl3;
+  license = stdenv.lib.licenses.bsd3;
 }
