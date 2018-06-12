@@ -16,8 +16,8 @@ import (import ./nixpkgs) {
         spec = {
           owner = "dapphub";
           repo = "nixpkgs-dapphub";
-          rev = "8eb683629c304a64658f77277eceb5f553bf95ba";
-          sha256 = "1hp5xp7dp4igwy4i92r9qf5lc03s3r0rgyiddkfy3hhwxr8n1g30";
+          rev = "54f47cfd0098682d56e257e19428d2f9d341c2c8";
+          sha256 = "0zxisq36yp4w78g4hzi6r5y5m4k3d3drfyscxiqbgb4xa7cig3ip";
         };
         pkgs' = import (import ./nixpkgs) { config = {}; overlays = []; };
         src = pkgs'.fetchFromGitHub {
