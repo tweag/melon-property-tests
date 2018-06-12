@@ -20,8 +20,7 @@ The property-tests are written in Haskell. The bindings against the Melon fund
 smart-contract are generated automatically from the binary ABI files and the
 binary contract files. These binaries can either be provided externally, or
 generated from this repository. The Melon fund smart-contract is contained as a
-git submodule. Generating the contract binaries additionally requires the
-[dapp-tools](https://dapp.tools/) to be installed.
+git submodule.
 
 If the set of dependencies changes, e.g. due to new node dependencies in the
 smart-contract or due to new haskell dependencies in the property-tests then

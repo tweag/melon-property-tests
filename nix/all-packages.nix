@@ -16,10 +16,14 @@ with super;
       smart-contracts = callPackage ./smart-contracts {
         nodejs = self.nodejs-8_x;
       };
+      extraDeps = with self; [ git dapp seth hevm evmdis ];
     in
     smart-contracts // {
       package = smart-contracts.package.overrideAttrs (attrs: {
-        nativeBuildInputs = attrs.nativeBuildInputs or [] ++ [ self.git ];
+        nativeBuildInputs = attrs.nativeBuildInputs or [] ++ extraDeps;
+      });
+      shell = smart-contracts.shell.overrideAttrs (attrs: {
+        nativeBuildInputs = attrs.nativeBuildInputs or [] ++ extraDeps;
       });
     }
   ;
