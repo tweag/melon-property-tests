@@ -1,6 +1,7 @@
 {-# OPTIONS_GHC -fno-warn-simplifiable-class-constraints #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Melon.ThirdParty.Network.Ethereum.Web3.Eth
   ( getTransactionReceipt'
@@ -9,7 +10,9 @@ module Melon.ThirdParty.Network.Ethereum.Web3.Eth
   , TransactionError (..)
   ) where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception.Safe (Exception (..), throw)
+import Control.Monad.IO.Class (liftIO)
 import Data.Default (Default)
 import Data.Typeable (Typeable)
 import Network.Ethereum.ABI.Event (DecodeEvent)
@@ -27,6 +30,8 @@ data TransactionError
     -- ^ No transaction receipt was available.
   | NoContractAddress Hash
     -- ^ The transaction did not return a contract address.
+  | TransactionNotMined Hash
+    -- ^ The transaction was not mined.
   deriving (Show, Typeable)
 instance Exception TransactionError where
   displayException = \case
@@ -36,14 +41,26 @@ instance Exception TransactionError where
     NoContractAddress tx ->
       "No contract address available for transaction hash "
       ++ show tx ++ "."
+    TransactionNotMined tx ->
+      "The transaction " ++ show tx ++ " was not mined."
 
 
 -- | Retrieve the 'Network.Ethereum.Web3.Types.TxReceipt' to the given
 -- transaction hash. Throw an exception if it is unavailable.
 getTransactionReceipt' :: Hash -> Web3 TxReceipt
-getTransactionReceipt' tx =
-  getTransactionReceipt tx
-  >>= maybe (throw $ NoTransactionReceipt tx) pure
+getTransactionReceipt' tx = go 0
+  where
+    go :: Int -> Web3 TxReceipt
+    go 10 = throw $ TransactionNotMined tx
+    go n = getTransactionReceipt tx >>= \case
+      Nothing ->
+        throw $ NoTransactionReceipt tx
+      Just (receiptBlockHash -> Nothing) -> do
+        -- Transaction wasn't mined, yet.
+        liftIO $ threadDelay 5000
+        go (succ n)
+      Just receipt ->
+        pure receipt
 
 
 -- | Retrieve the contract address of the contract deployed during the
