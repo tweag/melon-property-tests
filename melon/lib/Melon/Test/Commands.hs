@@ -390,7 +390,7 @@ cmdUpdatePriceFeed input =
       | otherwise = Just $ pure $
           CmdUpdatePriceFeed $ head (s^.msPriceFeed)
     execute (CmdUpdatePriceFeed prices) = do
-      updatePriceFeed prices
+      evalM $ updatePriceFeed prices
       defaultCall <- getCall
       let callFeed = defaultCall { callTo = Just canonicalPriceFeed }
           assets = input^.miVersion.vdAssets.to HashMap.keys
